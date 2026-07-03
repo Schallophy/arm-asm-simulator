@@ -1369,7 +1369,7 @@ public:
                         sim_.step(false);
                     }
                     render();
-                    napms(200);
+                    napms(20);
                     int k = getch();
                     if (k == 'q' || k == 'Q') {
                         nodelay(stdscr, FALSE);
