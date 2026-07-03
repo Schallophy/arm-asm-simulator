@@ -1299,20 +1299,33 @@ public:
         : sim_(sim), sourceText_(source), sourceName_(sourceName) {}
 
     void run() {
-        // ncurses picks its output encoding from the C runtime locale, not
-        // from the Windows console code page. So setting CP_UTF8 alone is
-        // not enough — we have to put the C locale into a UTF-8 codeset,
-        // otherwise on a fresh cmd.exe / PowerShell session LC_ALL falls
-        // back to "C" (ASCII) and Chinese characters come out garbled.
-        char *loc = setlocale(LC_ALL, "");
-        if (loc == nullptr || std::strstr(loc, "UTF-8") == nullptr) {
-            if (setlocale(LC_ALL, ".UTF-8") == nullptr) {
-                setlocale(LC_ALL, "en_US.UTF-8");
+        // ncurses picks its output encoding from the C runtime locale.
+        // Different platforms name the "always UTF-8" locale differently:
+        //   * Microsoft UCRT (used by MSYS2 MinGW64)  -> "C.UTF-8"
+        //   * glibc (Linux)                            -> ".UTF-8" or "C.UTF-8"
+        //   * macOS                                    -> "C.UTF-8" (10.15+) or "en_US.UTF-8"
+        // Try them in order; if none stick, fall back to the environment
+        // locale, which is already UTF-8 under MSYS2's mintty.
+        static const char *const utf8_locales[] = {
+            "C.UTF-8",
+            ".UTF-8",
+            "en_US.UTF-8",
+            "en-US.UTF-8",
+        };
+        const char *loc = nullptr;
+        for (const char *name : utf8_locales) {
+            if (setlocale(LC_ALL, name) != nullptr) {
+                loc = name;
+                break;
             }
         }
+        if (loc == nullptr) {
+            setlocale(LC_ALL, "");
+        }
 #ifdef _WIN32
-        // Also switch the console code page so any output *before*
-        // initscr (or outside ncurses in batch mode) is UTF-8 too.
+        // Also switch the console code page for any non-ncurses output
+        // (messages before initscr, batch mode, etc.). ncurses itself does
+        // not consult the console code page.
         SetConsoleOutputCP(CP_UTF8);
         SetConsoleCP(CP_UTF8);
 #endif
