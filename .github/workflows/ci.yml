@@ -82,6 +82,39 @@ jobs:
         shell: msys2 {0}
         run: cmake --build build --parallel
 
+      - name: Upload binaries (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm_asm_simulator-linux-x86_64
+          path: |
+            build/arm_asm_simulator
+            build/arm_asm_simulator_en
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload binaries (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm_asm_simulator-macos-x86_64
+          path: |
+            build/arm_asm_simulator
+            build/arm_asm_simulator_en
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload binaries (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm_asm_simulator-windows-x86_64
+          path: |
+            build/arm_asm_simulator.exe
+            build/arm_asm_simulator_en.exe
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Run tests (Linux/macOS)
         if: runner.os != 'Windows'
         run: bash test/run_tests.sh
