@@ -1691,7 +1691,7 @@ private:
 
         long long startRow = minAddr;
 
-        char buf[256];
+        char buf[512];
         for (int row = 0; row < available; ++row) {
             const long long rowAddr = startRow + row * bytesPerRow;
             int p = 0;
@@ -1705,7 +1705,20 @@ private:
                 ascii[col] = (v >= 0x20 && v < 0x7F) ? static_cast<char>(v) : '.';
             }
             ascii[bytesPerRow] = '\0';
+            // 每行末尾追加 4 个 32-bit 字的十进制值（小端序读取）
             p += snprintf(buf + p, sizeof(buf) - p, " |%s|", ascii);
+            for (int w = 0; w < 4; ++w) {
+                const long long wa = rowAddr + w * 4;
+                unsigned int word = 0;
+                for (int b = 0; b < 4; ++b) {
+                    const long long ba = wa + b;
+                    const long long bv = runtimeMem.count(ba) ? runtimeMem.at(ba)
+                                        : (src.dataMemory.count(ba) ? src.dataMemory.at(ba) : 0);
+                    word |= static_cast<unsigned int>(bv & 0xFF) << (b * 8);
+                }
+                int s = static_cast<int>(word);
+                p += snprintf(buf + p, sizeof(buf) - p, " %d", s);
+            }
             mvwprintw(memWin_, headerRow + row, 1, "%s", buf);
         }
         wnoutrefresh(memWin_);
@@ -1795,6 +1808,45 @@ int main(int argc, char *argv[]) {
             }
             std::cout << "N=" << (f.n ? 1 : 0) << " Z=" << (f.z ? 1 : 0)
                       << " C=" << (f.c ? 1 : 0) << " V=" << (f.v ? 1 : 0) << "\n";
+
+            // --- 内存输出（batch 模式）---
+            const auto &src = simulator.getCompiled();
+            const auto &runtimeMem = simulator.getMemory();
+            if (!src.dataMemory.empty()) {
+                std::cout << "\nMemory:\n";
+                long long minAddr = 0, maxAddr = 0;
+                for (const auto &kv : src.dataMemory) {
+                    if (kv.first < minAddr) minAddr = kv.first;
+                    if (kv.first > maxAddr) maxAddr = kv.first;
+                }
+                minAddr = (minAddr / 16) * 16;
+                maxAddr = ((maxAddr + 16) / 16) * 16;
+                for (long long addr = minAddr; addr <= maxAddr; addr += 16) {
+                    std::cout << " " << std::hex << std::setw(4) << std::setfill('0') << addr << ": ";
+                    // hex bytes
+                    for (int b = 0; b < 16; ++b) {
+                        long long a = addr + b;
+                        long long v = runtimeMem.count(a) ? runtimeMem.at(a)
+                                      : (src.dataMemory.count(a) ? src.dataMemory.at(a) : 0);
+                        std::cout << std::hex << std::setw(2) << std::setfill('0') << (v & 0xFF) << " ";
+                    }
+                    // decimal words (little-endian)
+                    std::cout << " |";
+                    for (int w = 0; w < 4; ++w) {
+                        long long wa = addr + w * 4;
+                        unsigned int word = 0;
+                        for (int b = 0; b < 4; ++b) {
+                            long long ba = wa + b;
+                            long long bv = runtimeMem.count(ba) ? runtimeMem.at(ba)
+                                           : (src.dataMemory.count(ba) ? src.dataMemory.at(ba) : 0);
+                            word |= static_cast<unsigned int>(bv & 0xFF) << (b * 8);
+                        }
+                        std::cout << " " << std::dec << static_cast<int>(word);
+                    }
+                    std::cout << "\n";
+                }
+                std::cout << std::dec; // restore decimal mode
+            }
             return 0;
         }
 
