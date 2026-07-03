@@ -1424,7 +1424,7 @@ private:
 
         if (maxY < 22 || maxX < 50) {
             endwin();
-            std::cerr << STR_TERMINAL_TOO_SMALL << maxX << "x" << maxY << "）\n";
+            std::cerr << STR_TERMINAL_TOO_SMALL << maxX << "x" << maxY << STR_TERMINAL_SUGGESTION << "\n";
             std::exit(1);
         }
 
