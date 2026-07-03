@@ -56,6 +56,7 @@ struct Flags {
 struct MemoryOperand {
     int baseReg = -1;
     long long offset = 0;
+    bool writeBack = false;
 };
 
 struct Instruction {
@@ -95,12 +96,12 @@ std::vector<std::string> splitOperands(const std::string &text) {
     std::string current;
     int bracketDepth = 0;
     for (char ch : text) {
-        if (ch == '[') {
+        if (ch == '[' || ch == '{') {
             ++bracketDepth;
             current.push_back(ch);
             continue;
         }
-        if (ch == ']') {
+        if (ch == ']' || ch == '}') {
             --bracketDepth;
             current.push_back(ch);
             continue;
@@ -173,21 +174,92 @@ std::string registerName(int index) {
     return "?";
 }
 
-Cond parseCondSuffix(const std::string &op, std::string &base) {
-    static const std::array<std::pair<const char *, Cond>, 14> suffixes = {{
+bool isSupportedOpcode(const std::string &op);
+
+// Parse UAL opcode: op{cond}{S}. Returns true if a known opcode is found.
+bool parseOpcode(const std::string &token, std::string &op, Cond &cond, bool &setFlags) {
+    static const std::array<std::pair<const char *, Cond>, 14> condSuffixes = {{
         {"EQ", Cond::EQ}, {"NE", Cond::NE}, {"GT", Cond::GT}, {"LT", Cond::LT}, {"GE", Cond::GE},
         {"LE", Cond::LE}, {"HI", Cond::HI}, {"LS", Cond::LS}, {"CS", Cond::CS}, {"CC", Cond::CC},
         {"MI", Cond::MI}, {"PL", Cond::PL}, {"VS", Cond::VS}, {"VC", Cond::VC},
     }};
-    for (const auto &[suffix, cond] : suffixes) {
-        const std::size_t suffixLength = std::char_traits<char>::length(suffix);
-        if (op.size() > suffixLength && upper(op.substr(op.size() - suffixLength)) == suffix) {
-            base = op.substr(0, op.size() - suffixLength);
-            return cond;
+
+    std::string t = upper(token);
+    setFlags = false;
+
+    auto findCond = [&](const std::string &s, Cond &outCond, std::string &outBase) -> bool {
+        for (const auto &[suffix, c] : condSuffixes) {
+            std::size_t slen = std::char_traits<char>::length(suffix);
+            if (s.size() > slen && s.substr(s.size() - slen) == suffix) {
+                outCond = c;
+                outBase = s.substr(0, s.size() - slen);
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // UAL: op{cond}{S}
+    if (t.size() > 1 && t.back() == 'S') {
+        std::string withoutS = t.substr(0, t.size() - 1);
+        std::string base;
+        Cond c;
+        if (findCond(withoutS, c, base) && isSupportedOpcode(base)) {
+            op = upper(base);
+            cond = c;
+            setFlags = true;
+            return true;
         }
     }
-    base = op;
-    return Cond::AL;
+
+    // op{cond} (no S)
+    {
+        std::string base;
+        Cond c;
+        if (findCond(t, c, base) && isSupportedOpcode(base)) {
+            op = upper(base);
+            cond = c;
+            setFlags = false;
+            return true;
+        }
+    }
+
+    // Legacy: op{S}{cond}
+    {
+        std::string base;
+        Cond c;
+        if (findCond(t, c, base)) {
+            if (!base.empty() && base.back() == 'S') {
+                std::string opBase = base.substr(0, base.size() - 1);
+                if (isSupportedOpcode(opBase)) {
+                    op = upper(opBase);
+                    cond = c;
+                    setFlags = true;
+                    return true;
+                }
+            }
+        }
+    }
+
+    // op{S} (no cond)
+    if (t.size() > 1 && t.back() == 'S') {
+        std::string opBase = t.substr(0, t.size() - 1);
+        if (isSupportedOpcode(opBase)) {
+            op = upper(opBase);
+            cond = Cond::AL;
+            setFlags = true;
+            return true;
+        }
+    }
+
+    // Plain opcode
+    if (isSupportedOpcode(t)) {
+        op = upper(t);
+        cond = Cond::AL;
+        return true;
+    }
+
+    return false;
 }
 
 bool isDirectiveToken(const std::string &token) {
@@ -203,21 +275,55 @@ bool isDataDirective(const std::string &token) {
     return directive == "DCD" || directive == "DCW" || directive == "DCB" || directive == "SPACE";
 }
 
+std::vector<int> parseRegisterList(const std::string &text) {
+    std::vector<int> regs;
+    std::string inner = trim(text);
+    if (inner.size() < 2 || inner.front() != '{' || inner.back() != '}') {
+        return regs;
+    }
+    inner = inner.substr(1, inner.size() - 2);
+    const auto pieces = splitOperands(inner);
+    for (const auto &piece : pieces) {
+        const auto dashPos = piece.find('-');
+        if (dashPos != std::string::npos) {
+            int first = registerIndex(trim(piece.substr(0, dashPos)));
+            int last = registerIndex(trim(piece.substr(dashPos + 1)));
+            if (first >= 0 && last >= 0 && first <= last) {
+                for (int r = first; r <= last; ++r) {
+                    regs.push_back(r);
+                }
+            }
+        } else {
+            int r = registerIndex(trim(piece));
+            if (r >= 0) {
+                regs.push_back(r);
+            }
+        }
+    }
+    return regs;
+}
+
 bool isSupportedOpcode(const std::string &op) {
     static const std::unordered_set<std::string> supported = {
-        "MOV", "MVN", "ADD", "SUB", "AND", "ORR", "EOR", "BIC",
-        "CMP", "CMN", "LDR", "STR", "B", "BL", "BX"
+        "MOV", "MVN", "ADD", "SUB", "RSB", "RSC", "ADC", "SBC",
+        "AND", "ORR", "EOR", "BIC",
+        "MUL", "MLA",
+        "CMP", "CMN", "TST", "TEQ",
+        "LDR", "STR",
+        "B", "BL", "BX",
+        "NOP",
+        "LDM", "LDMIA", "LDMIB", "LDMDA", "LDMDB", "LDMFD", "LDMED", "LDMEA", "LDMFA",
+        "STM", "STMIA", "STMIB", "STMDA", "STMDB", "STMFD", "STMED", "STMEA", "STMFA",
+        "PUSH", "POP"
     };
     return supported.count(upper(op)) > 0;
 }
 
 bool isSupportedInstructionToken(const std::string &token) {
-    std::string baseOp;
-    parseCondSuffix(upper(token), baseOp);
-    if (!baseOp.empty() && baseOp.back() == 'S' && baseOp != "B" && baseOp != "BL" && baseOp != "BX") {
-        baseOp.pop_back();
-    }
-    return isSupportedOpcode(baseOp);
+    std::string op;
+    Cond cond;
+    bool setFlags;
+    return parseOpcode(token, op, cond, setFlags);
 }
 
 bool isConditionSatisfied(Cond cond, const Flags &flags) {
@@ -328,14 +434,11 @@ public:
             inst.lineNo = targetLine;
             inst.original = trim(text);
 
-            std::string baseOp;
-            inst.cond = parseCondSuffix(upper(opToken), baseOp);
-            inst.setFlags = false;
-            if (!baseOp.empty() && baseOp.back() == 'S' && baseOp != "B" && baseOp != "BL" && baseOp != "BX") {
-                inst.setFlags = true;
-                baseOp.pop_back();
+            if (!parseOpcode(opToken, inst.op, inst.cond, inst.setFlags)) {
+                inst.op = upper(opToken);
+                inst.cond = Cond::AL;
+                inst.setFlags = false;
             }
-            inst.op = upper(baseOp);
 
             std::string remaining;
             std::getline(parser, remaining);
@@ -521,24 +624,48 @@ public:
             const int reg = registerIndex(token);
             if (reg >= 0) {
                 usedRegisters.insert(reg);
+                if (reg == 15) return static_cast<long long>(pc_);
                 return registers_[reg];
             }
             const auto number = parseNumber(token);
             return number.has_value() ? *number : 0;
         };
 
+        auto alu32 = [](long long v) -> long long {
+            return static_cast<long long>(static_cast<int>(static_cast<unsigned>(v & 0xFFFFFFFF)));
+        };
+
         auto writeValue = [&](const std::string &token, long long value) {
             const int reg = registerIndex(token);
             if (reg >= 0) {
                 writtenRegisters.insert(reg);
-                registers_[reg] = value;
                 touchedRegisters_.insert(reg);
+                if (reg == 15) {
+                    pc_ = static_cast<int>(value);
+                    branched = true;
+                    return;
+                }
+                registers_[reg] = alu32(value);
             }
+        };
+
+        auto updateNZ = [&](long long value) {
+            flags_.z = (value == 0);
+            flags_.n = (value < 0);
         };
 
         auto parseMemoryOperand = [&](const std::string &token) -> std::optional<MemoryOperand> {
             std::string text = trim(token);
-            if (text.size() < 3 || text.front() != '[' || text.back() != ']') {
+            if (text.size() < 3 || text.front() != '[') {
+                return std::nullopt;
+            }
+            bool writeBack = false;
+            if (text.back() == '!') {
+                writeBack = true;
+                text.pop_back();
+                text = trim(text);
+            }
+            if (text.size() < 2 || text.back() != ']') {
                 return std::nullopt;
             }
             text = trim(text.substr(1, text.size() - 2));
@@ -548,6 +675,7 @@ public:
             }
             MemoryOperand operand;
             operand.baseReg = registerIndex(pieces[0]);
+            operand.writeBack = writeBack;
             if (operand.baseReg < 0) {
                 return std::nullopt;
             }
@@ -561,7 +689,7 @@ public:
                     if (offsetReg < 0) {
                         return std::nullopt;
                     }
-                    operand.offset = registers_[offsetReg];
+                    operand.offset = offsetReg == 15 ? static_cast<long long>(pc_) : registers_[offsetReg];
                     usedRegisters.insert(offsetReg);
                 }
             }
@@ -580,9 +708,28 @@ public:
             return it->second;
         };
 
-        auto updateNZ = [&](long long value) {
-            flags_.z = (value == 0);
-            flags_.n = (value < 0);
+        auto updateALUFlags = [&](long long left, long long right, long long result, const std::string &opcode) {
+            unsigned ul = static_cast<unsigned>(left & 0xFFFFFFFF);
+            unsigned ur = static_cast<unsigned>(right & 0xFFFFFFFF);
+            unsigned ures = static_cast<unsigned>(result & 0xFFFFFFFF);
+            int sl = static_cast<int>(ul);
+            int sr = static_cast<int>(ur);
+            int sres = static_cast<int>(ures);
+            flags_.n = sres < 0;
+            flags_.z = (ures == 0);
+            if (opcode == "ADD" || opcode == "ADC" || opcode == "CMN") {
+                flags_.c = (static_cast<unsigned long long>(ul) + ur) > 0xFFFFFFFFULL;
+                flags_.v = ((~(sl ^ sr)) & (sl ^ sres)) < 0;
+            } else if (opcode == "SUB" || opcode == "SBC" || opcode == "CMP") {
+                flags_.c = static_cast<unsigned long long>(ul) >= static_cast<unsigned long long>(ur);
+                flags_.v = ((sl ^ sr) & (sl ^ sres)) < 0;
+            } else if (opcode == "RSB" || opcode == "RSC") {
+                flags_.c = static_cast<unsigned long long>(ur) >= static_cast<unsigned long long>(ul);
+                flags_.v = ((sl ^ sr) & (sr ^ sres)) < 0;
+            } else {
+                flags_.c = false;
+                flags_.v = false;
+            }
         };
 
         auto branchTo = [&](const std::string &label) -> bool {
@@ -613,26 +760,42 @@ public:
         if (op == "MOV" || op == "MVN") {
             if (inst.operands.size() >= 2) {
                 const long long source = readValue(inst.operands[1]);
-                const long long result = op == "MOV" ? source : ~source;
+                const long long result = op == "MOV" ? source : (~source & 0xFFFFFFFF);
                 writeValue(inst.operands[0], result);
                 if (inst.setFlags) {
-                    updateNZ(result);
+                    updateNZ(alu32(result));
                 }
             }
-        } else if (op == "ADD" || op == "SUB" || op == "AND" || op == "ORR" || op == "EOR" || op == "BIC") {
+        } else if (op == "ADD" || op == "SUB" || op == "RSB" || op == "ADC" || op == "SBC" || op == "RSC") {
             if (inst.operands.size() >= 3) {
                 const long long left = readValue(inst.operands[1]);
                 const long long right = readValue(inst.operands[2]);
                 long long result = 0;
                 if (op == "ADD") result = left + right;
-                if (op == "SUB") result = left - right;
-                if (op == "AND") result = left & right;
-                if (op == "ORR") result = left | right;
-                if (op == "EOR") result = left ^ right;
-                if (op == "BIC") result = left & ~right;
-                writeValue(inst.operands[0], result);
+                else if (op == "SUB") result = left - right;
+                else if (op == "RSB") result = right - left;
+                else if (op == "ADC") result = left + right + (flags_.c ? 1 : 0);
+                else if (op == "SBC") result = left - right - (flags_.c ? 0 : 1);
+                else if (op == "RSC") result = right - left - (flags_.c ? 0 : 1);
+                long long masked = alu32(result);
+                writeValue(inst.operands[0], masked);
                 if (inst.setFlags) {
-                    updateNZ(result);
+                    updateALUFlags(left, right, result, op);
+                }
+            }
+        } else if (op == "AND" || op == "ORR" || op == "EOR" || op == "BIC") {
+            if (inst.operands.size() >= 3) {
+                const long long left = readValue(inst.operands[1]);
+                const long long right = readValue(inst.operands[2]);
+                long long result = 0;
+                if (op == "AND") result = left & right;
+                else if (op == "ORR") result = left | right;
+                else if (op == "EOR") result = left ^ right;
+                else if (op == "BIC") result = left & ~right;
+                long long masked = alu32(result);
+                writeValue(inst.operands[0], masked);
+                if (inst.setFlags) {
+                    updateNZ(masked);
                 }
             }
         } else if (op == "CMP") {
@@ -640,20 +803,79 @@ public:
                 const long long left = readValue(inst.operands[0]);
                 const long long right = readValue(inst.operands[1]);
                 const long long result = left - right;
-                updateNZ(result);
-                flags_.c = left >= right;
-                flags_.v = ((left ^ right) & (left ^ result)) < 0;
+                updateALUFlags(left, right, result, "CMP");
             }
         } else if (op == "CMN") {
             if (inst.operands.size() >= 2) {
                 const long long left = readValue(inst.operands[0]);
                 const long long right = readValue(inst.operands[1]);
                 const long long result = left + right;
-                updateNZ(result);
-                flags_.c = result < left;
-                flags_.v = ((~(left ^ right)) & (left ^ result)) < 0;
+                updateALUFlags(left, right, result, "CMN");
             }
-        } else if (op == "LDR") {
+        } else if (op == "TST") {
+            if (inst.operands.size() >= 2) {
+                const long long left = readValue(inst.operands[0]);
+                const long long right = readValue(inst.operands[1]);
+                const long long result = left & right;
+                updateNZ(alu32(result));
+            }
+        } else if (op == "TEQ") {
+            if (inst.operands.size() >= 2) {
+                const long long left = readValue(inst.operands[0]);
+                const long long right = readValue(inst.operands[1]);
+                const long long result = left ^ right;
+                updateNZ(alu32(result));
+            }
+        } else if (op == "MUL") {
+            if (inst.operands.size() >= 3) {
+                const long long rm = readValue(inst.operands[1]);
+                const long long rs = readValue(inst.operands[2]);
+                const long long result = rm * rs;
+                long long masked = alu32(result);
+                writeValue(inst.operands[0], masked);
+                if (inst.setFlags) {
+                    updateNZ(masked);
+                }
+            }
+        } else if (op == "MLA") {
+            if (inst.operands.size() >= 4) {
+                const long long rm = readValue(inst.operands[1]);
+                const long long rs = readValue(inst.operands[2]);
+                const long long ra = readValue(inst.operands[3]);
+                const long long result = (rm * rs) + ra;
+                long long masked = alu32(result);
+                writeValue(inst.operands[0], masked);
+                if (inst.setFlags) {
+                    updateNZ(masked);
+                }
+            }
+        } else if (op == "NOP") {
+            // do nothing
+        }
+
+        auto writeReg = [&](int reg, long long value) {
+            if (reg == 15) {
+                pc_ = static_cast<int>(value);
+                branched = true;
+            } else {
+                registers_[reg] = alu32(value);
+                writtenRegisters.insert(reg);
+                touchedRegisters_.insert(reg);
+            }
+        };
+
+        auto addToReg = [&](int reg, long long delta) {
+            if (reg == 15) {
+                pc_ = static_cast<int>(static_cast<long long>(pc_) + delta);
+                branched = true;
+            } else {
+                registers_[reg] = alu32(registers_[reg] + delta);
+                writtenRegisters.insert(reg);
+                touchedRegisters_.insert(reg);
+            }
+        };
+
+        if (op == "LDR") {
             if (inst.operands.size() >= 2) {
                 const std::string &dest = inst.operands[0];
                 if (!inst.operands[1].empty() && inst.operands[1][0] == '=') {
@@ -664,13 +886,17 @@ public:
                 } else {
                     const auto memoryOperand = parseMemoryOperand(inst.operands[1]);
                     if (memoryOperand.has_value()) {
-                        const long long address = registers_[memoryOperand->baseReg] + memoryOperand->offset;
+                        long long base = registers_[memoryOperand->baseReg];
+                        if (memoryOperand->writeBack) {
+                            base += memoryOperand->offset;
+                            writeReg(memoryOperand->baseReg, base);
+                        }
+                        const long long address = base + (memoryOperand->writeBack ? 0 : memoryOperand->offset);
                         const long long value = memory_.count(address) ? memory_[address] : 0;
                         writeValue(dest, value);
-                        if (inst.operands.size() == 3) {
+                        if (!memoryOperand->writeBack && inst.operands.size() == 3) {
                             const long long postOffset = readValue(inst.operands[2]);
-                            registers_[memoryOperand->baseReg] += postOffset;
-                            writtenRegisters.insert(memoryOperand->baseReg);
+                            addToReg(memoryOperand->baseReg, postOffset);
                         }
                     }
                 }
@@ -680,13 +906,16 @@ public:
                 const long long value = readValue(inst.operands[0]);
                 const auto memoryOperand = parseMemoryOperand(inst.operands[1]);
                 if (memoryOperand.has_value()) {
-                    const long long address = registers_[memoryOperand->baseReg] + memoryOperand->offset;
+                    long long base = registers_[memoryOperand->baseReg];
+                    if (memoryOperand->writeBack) {
+                        base += memoryOperand->offset;
+                        writeReg(memoryOperand->baseReg, base);
+                    }
+                    const long long address = base + (memoryOperand->writeBack ? 0 : memoryOperand->offset);
                     memory_[address] = value;
-                    if (inst.operands.size() == 3) {
+                    if (!memoryOperand->writeBack && inst.operands.size() == 3) {
                         const long long postOffset = readValue(inst.operands[2]);
-                        registers_[memoryOperand->baseReg] += postOffset;
-                        writtenRegisters.insert(memoryOperand->baseReg);
-                        touchedRegisters_.insert(memoryOperand->baseReg);
+                        addToReg(memoryOperand->baseReg, postOffset);
                     }
                 }
             }
@@ -704,6 +933,71 @@ public:
                 const long long target = readValue(inst.operands[0]);
                 pc_ = static_cast<int>(target);
                 branched = true;
+            }
+        } else if (op == "LDM" || op == "STM" || op == "PUSH" || op == "POP"
+                   || op.find("LDM") == 0 || op.find("STM") == 0) {
+            std::string effOp;
+            int mode = 0; // 0=IA, 1=IB, 2=DA, 3=DB
+            if (op == "PUSH") { effOp = "STM"; mode = 3; }
+            else if (op == "POP") { effOp = "LDM"; }
+            else if (op == "LDM" || op == "LDMIA" || op == "LDMFD") effOp = "LDM";
+            else if (op == "LDMIB" || op == "LDMED") { effOp = "LDM"; mode = 1; }
+            else if (op == "LDMDA" || op == "LDMFA") { effOp = "LDM"; mode = 2; }
+            else if (op == "LDMDB" || op == "LDMEA") { effOp = "LDM"; mode = 3; }
+            else if (op == "STM" || op == "STMIA" || op == "STMEA") effOp = "STM";
+            else if (op == "STMIB" || op == "STMFA") { effOp = "STM"; mode = 1; }
+            else if (op == "STMDA" || op == "STMED") { effOp = "STM"; mode = 2; }
+            else if (op == "STMDB" || op == "STMFD") { effOp = "STM"; mode = 3; }
+            else { effOp.clear(); }
+
+            if (!effOp.empty() && !inst.operands.empty()) {
+                int baseReg = -1;
+                bool writeBack = false;
+
+                if (op == "PUSH" || op == "POP") {
+                    baseReg = 13;
+                    writeBack = true;
+                } else {
+                    std::string baseText = inst.operands[0];
+                    if (!baseText.empty() && baseText.back() == '!') {
+                        writeBack = true;
+                        baseText.pop_back();
+                        baseText = trim(baseText);
+                    }
+                    baseReg = registerIndex(baseText);
+                }
+
+                std::vector<int> regList = parseRegisterList(inst.operands.back());
+                if (!regList.empty() && baseReg >= 0) {
+                    std::sort(regList.begin(), regList.end());
+                    const long long baseAddr = registers_[baseReg];
+                    const int count = static_cast<int>(regList.size());
+                    long long startAddr, finalAddr;
+
+                    switch (mode) {
+                    case 1: startAddr = baseAddr + 4;          finalAddr = baseAddr + 4LL * count; break;
+                    case 2: startAddr = baseAddr - 4LL * (count - 1); finalAddr = baseAddr - 4LL * count; break;
+                    case 3: startAddr = baseAddr - 4LL * count;       finalAddr = baseAddr - 4LL * count; break;
+                    default: startAddr = baseAddr;              finalAddr = baseAddr + 4LL * count; break;
+                    }
+
+                    if (effOp == "STM") {
+                        for (int i = 0; i < count; ++i)
+                            memory_[startAddr + 4LL * i] = registers_[regList[i]];
+                        if (writeBack) {
+                            writeReg(baseReg, finalAddr);
+                        }
+                    } else {
+                        for (int i = 0; i < count; ++i) {
+                            const long long addr = startAddr + 4LL * i;
+                            const long long loaded = memory_.count(addr) ? memory_[addr] : 0;
+                            writeReg(regList[i], loaded);
+                        }
+                        if (writeBack) {
+                            writeReg(baseReg, finalAddr);
+                        }
+                    }
+                }
             }
         }
 
@@ -745,7 +1039,7 @@ private:
                 continue;
             }
 
-            if (inst.op == "ADD" || inst.op == "SUB" || inst.op == "AND" || inst.op == "ORR" || inst.op == "EOR" || inst.op == "BIC") {
+            if (inst.op == "ADD" || inst.op == "SUB" || inst.op == "RSB" || inst.op == "ADC" || inst.op == "SBC" || inst.op == "RSC" || inst.op == "AND" || inst.op == "ORR" || inst.op == "EOR" || inst.op == "BIC") {
                 if (inst.operands.size() != 3) {
                     addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 需要 3 个操作数");
                 }
@@ -775,18 +1069,22 @@ private:
                 if (!operand.empty() && operand[0] == '=') {
                     if (inst.op == "STR") {
                         addCompileError(inst.lineNo, CompileErrorKind::InvalidMemoryOperand, "STR 不支持字面量操作数: " + operand);
-                    } else if (compiled_.symbolAddresses.count(upper(trim(operand.substr(1)))) == 0) {
+                    } else if (!parseNumber(operand.substr(1)).has_value() &&
+                               compiled_.symbolAddresses.count(upper(trim(operand.substr(1)))) == 0) {
                         addCompileError(inst.lineNo, CompileErrorKind::UndefinedLabel, "未定义的符号: " + operand.substr(1));
                     }
                     continue;
                 }
 
-                if (operand.size() < 3 || operand.front() != '[' || operand.back() != ']') {
+                std::string opCheck = trim(operand);
+                bool hasBang = !opCheck.empty() && opCheck.back() == '!';
+                if (hasBang) opCheck.pop_back();
+                if (opCheck.size() < 2 || opCheck.front() != '[' || opCheck.back() != ']') {
                     addCompileError(inst.lineNo, CompileErrorKind::InvalidMemoryOperand, "指令 '" + inst.op + "' 的内存操作数格式错误: " + operand);
                     continue;
                 }
 
-                const std::string inner = trim(operand.substr(1, operand.size() - 2));
+                const std::string inner = trim(opCheck.substr(1, opCheck.size() - 2));
                 const auto pieces = splitOperands(inner);
                 if (pieces.empty() || registerIndex(pieces[0]) < 0) {
                     addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 '" + inst.op + "' 的基址寄存器无效: " + operand);
@@ -826,6 +1124,60 @@ private:
                 if (registerIndex(inst.operands[0]) < 0) {
                     addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 'BX' 的寄存器无效: " + inst.operands[0]);
                 }
+                continue;
+            }
+
+            if (inst.op == "TST" || inst.op == "TEQ" || inst.op == "CMP" || inst.op == "CMN") {
+                if (inst.operands.size() != 2) {
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 需要 2 个操作数");
+                }
+                continue;
+            }
+
+            if (inst.op == "MUL" || inst.op == "MLA") {
+                if (inst.operands.size() < 3) {
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 参数不足");
+                }
+                if (!inst.operands.empty() && registerIndex(inst.operands[0]) < 0) {
+                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 '" + inst.op + "' 的目标寄存器无效: " + inst.operands[0]);
+                }
+                continue;
+            }
+
+            if (inst.op == "NOP") {
+                if (!inst.operands.empty()) {
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 'NOP' 不需要操作数");
+                }
+                continue;
+            }
+
+            if (inst.op == "LDM" || inst.op == "STM" || inst.op == "PUSH" || inst.op == "POP"
+                || inst.op.find("LDM") == 0 || inst.op.find("STM") == 0) {
+                int baseReg = -1;
+                if (inst.op == "PUSH" || inst.op == "POP") {
+                    baseReg = 13;
+                } else {
+                    if (inst.operands.size() < 2) {
+                        addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 需要 base 寄存器和寄存器列表");
+                        continue;
+                    }
+                    std::string baseText = inst.operands[0];
+                    if (!baseText.empty() && baseText.back() == '!') {
+                        baseText.pop_back();
+                        baseText = trim(baseText);
+                    }
+                    baseReg = registerIndex(baseText);
+                    if (baseReg < 0) {
+                        addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 '" + inst.op + "' 的基址寄存器无效: " + inst.operands[0]);
+                        continue;
+                    }
+                }
+                const std::string &listText = inst.operands.back();
+                const auto regs = parseRegisterList(listText);
+                if (regs.empty()) {
+                    addCompileError(inst.lineNo, CompileErrorKind::Generic, "指令 '" + inst.op + "' 的寄存器列表无效: " + listText);
+                }
+                continue;
             }
         }
     }
