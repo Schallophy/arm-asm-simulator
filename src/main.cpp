@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "i18n.h"
 
 #include <ncurses.h>
 
@@ -391,7 +392,7 @@ public:
         auto defineCodeLabel = [&](const std::string &label, int labelLine) {
             const std::string normalized = upper(label);
             if (compiled_.codeLabels.count(normalized) > 0 || compiled_.symbolAddresses.count(normalized) > 0) {
-                addCompileError(labelLine, CompileErrorKind::DuplicateLabel, "重复定义标签 '" + label + "'");
+                addCompileError(labelLine, CompileErrorKind::DuplicateLabel, STR_DUPLICATE_LABEL + label + "'");
                 return;
             }
             compiled_.codeLabels[normalized] = static_cast<int>(compiled_.instructions.size());
@@ -402,7 +403,7 @@ public:
         auto defineDataLabel = [&](const std::string &label, int labelLine) {
             const std::string normalized = upper(label);
             if (compiled_.codeLabels.count(normalized) > 0 || compiled_.symbolAddresses.count(normalized) > 0) {
-                addCompileError(labelLine, CompileErrorKind::DuplicateLabel, "重复定义标签 '" + label + "'");
+                addCompileError(labelLine, CompileErrorKind::DuplicateLabel, STR_DUPLICATE_LABEL + label + "'");
                 return;
             }
             compiled_.symbolAddresses[normalized] = dataAddress;
@@ -456,7 +457,7 @@ public:
                 if (!operands.empty()) {
                     const auto value = parseNumber(operands[0]);
                     if (!value.has_value()) {
-                        addCompileError(targetLine, CompileErrorKind::InvalidMemoryOperand, "SPACE 大小无效: " + operands[0]);
+                        addCompileError(targetLine, CompileErrorKind::InvalidMemoryOperand, STR_SPACE_SIZE_INVALID + operands[0]);
                         return;
                     }
                     size = *value;
@@ -469,7 +470,7 @@ public:
             for (const auto &operand : operands) {
                 const auto value = parseNumber(operand);
                 if (!value.has_value()) {
-                    addCompileError(targetLine, CompileErrorKind::InvalidMemoryOperand, normalized + " 常量无效: " + operand);
+                    addCompileError(targetLine, CompileErrorKind::InvalidMemoryOperand, normalized + STR_CONST_INVALID + operand);
                     continue;
                 }
                 compiled_.dataMemory[dataAddress] = *value;
@@ -607,7 +608,7 @@ public:
     void step(bool verbose = true) {
         if (finished()) {
             if (verbose) {
-                std::cout << "程序已结束。\n";
+                std::cout << STR_PROGRAM_FINISHED;
             }
             return;
         }
@@ -752,7 +753,7 @@ public:
 
         if (!isConditionSatisfied(inst.cond, flags_)) {
             if (verbose) {
-                std::cout << "条件不满足，跳过执行。\n";
+                std::cout << STR_COND_SKIP;
                 printRegisterUsage(usedRegisters, writtenRegisters);
                 printState();
             }
@@ -1029,53 +1030,53 @@ private:
     void validateProgram() {
         for (const auto &inst : compiled_.instructions) {
             if (!isSupportedOpcode(inst.op)) {
-                addCompileError(inst.lineNo, CompileErrorKind::UnsupportedOpcode, "不支持的指令 '" + inst.op + "'");
+                addCompileError(inst.lineNo, CompileErrorKind::UnsupportedOpcode, STR_UNSUPPORTED_OPCODE + inst.op + "'");
                 continue;
             }
 
             if (inst.op == "MOV" || inst.op == "MVN") {
                 if (inst.operands.size() != 2) {
-                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 需要 2 个操作数");
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_UNSUPPORTED_OPCODE + inst.op + STR_REQUIRES_OPERANDS + "2" + STR_OPERAND_SUFFIX);
                 }
                 if (!inst.operands.empty() && registerIndex(inst.operands[0]) < 0) {
-                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 '" + inst.op + "' 的目标寄存器无效: " + inst.operands[0]);
+                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, STR_UNSUPPORTED_OPCODE + inst.op + STR_DEST_REG_INVALID + inst.operands[0]);
                 }
                 continue;
             }
 
             if (inst.op == "ADD" || inst.op == "SUB" || inst.op == "RSB" || inst.op == "ADC" || inst.op == "SBC" || inst.op == "RSC" || inst.op == "AND" || inst.op == "ORR" || inst.op == "EOR" || inst.op == "BIC") {
                 if (inst.operands.size() != 3) {
-                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 需要 3 个操作数");
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_UNSUPPORTED_OPCODE + inst.op + STR_REQUIRES_OPERANDS + "3" + STR_OPERAND_SUFFIX);
                 }
                 if (!inst.operands.empty() && registerIndex(inst.operands[0]) < 0) {
-                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 '" + inst.op + "' 的目标寄存器无效: " + inst.operands[0]);
+                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, STR_UNSUPPORTED_OPCODE + inst.op + STR_DEST_REG_INVALID + inst.operands[0]);
                 }
                 continue;
             }
 
             if (inst.op == "CMP" || inst.op == "CMN") {
                 if (inst.operands.size() != 2) {
-                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 需要 2 个操作数");
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_UNSUPPORTED_OPCODE + inst.op + STR_REQUIRES_OPERANDS + "2" + STR_OPERAND_SUFFIX);
                 }
                 continue;
             }
 
             if (inst.op == "LDR" || inst.op == "STR") {
                 if (inst.operands.size() != 2 && inst.operands.size() != 3) {
-                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 需要 2 或 3 个操作数");
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_UNSUPPORTED_OPCODE + inst.op + STR_REQUIRES_OPERANDS + "2 or 3" + STR_OPERAND_SUFFIX);
                     continue;
                 }
                 if (!inst.operands.empty() && registerIndex(inst.operands[0]) < 0) {
-                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 '" + inst.op + "' 的寄存器无效: " + inst.operands[0]);
+                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, STR_UNSUPPORTED_OPCODE + inst.op + STR_INVALID_REG + inst.operands[0]);
                 }
 
                 const std::string &operand = inst.operands[1];
                 if (!operand.empty() && operand[0] == '=') {
                     if (inst.op == "STR") {
-                        addCompileError(inst.lineNo, CompileErrorKind::InvalidMemoryOperand, "STR 不支持字面量操作数: " + operand);
+                        addCompileError(inst.lineNo, CompileErrorKind::InvalidMemoryOperand, STR_STR_NO_LITERAL + operand);
                     } else if (!parseNumber(operand.substr(1)).has_value() &&
                                compiled_.symbolAddresses.count(upper(trim(operand.substr(1)))) == 0) {
-                        addCompileError(inst.lineNo, CompileErrorKind::UndefinedLabel, "未定义的符号: " + operand.substr(1));
+                        addCompileError(inst.lineNo, CompileErrorKind::UndefinedLabel, STR_UNDEFINED_SYMBOL + operand.substr(1));
                     }
                     continue;
                 }
@@ -1084,26 +1085,26 @@ private:
                 bool hasBang = !opCheck.empty() && opCheck.back() == '!';
                 if (hasBang) opCheck.pop_back();
                 if (opCheck.size() < 2 || opCheck.front() != '[' || opCheck.back() != ']') {
-                    addCompileError(inst.lineNo, CompileErrorKind::InvalidMemoryOperand, "指令 '" + inst.op + "' 的内存操作数格式错误: " + operand);
+                    addCompileError(inst.lineNo, CompileErrorKind::InvalidMemoryOperand, STR_UNSUPPORTED_OPCODE + inst.op + STR_INVALID_MEM_OPERAND + operand);
                     continue;
                 }
 
                 const std::string inner = trim(opCheck.substr(1, opCheck.size() - 2));
                 const auto pieces = splitOperands(inner);
                 if (pieces.empty() || registerIndex(pieces[0]) < 0) {
-                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 '" + inst.op + "' 的基址寄存器无效: " + operand);
+                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, STR_UNSUPPORTED_OPCODE + inst.op + STR_INVALID_BASE_REG + operand);
                     continue;
                 }
                 if (pieces.size() >= 2) {
                     const bool ok = registerIndex(pieces[1]) >= 0 || parseNumber(pieces[1]).has_value();
                     if (!ok) {
-                        addCompileError(inst.lineNo, CompileErrorKind::InvalidMemoryOperand, "指令 '" + inst.op + "' 的偏移量无效: " + pieces[1]);
+                        addCompileError(inst.lineNo, CompileErrorKind::InvalidMemoryOperand, STR_UNSUPPORTED_OPCODE + inst.op + STR_INVALID_OFFSET + pieces[1]);
                     }
                 }
                 if (inst.operands.size() == 3) {
                     const bool ok = registerIndex(inst.operands[2]) >= 0 || parseNumber(inst.operands[2]).has_value();
                     if (!ok) {
-                        addCompileError(inst.lineNo, CompileErrorKind::InvalidMemoryOperand, "后索引偏移无效: " + inst.operands[2]);
+                        addCompileError(inst.lineNo, CompileErrorKind::InvalidMemoryOperand, STR_INVALID_POST_OFFSET + inst.operands[2]);
                     }
                 }
                 continue;
@@ -1111,46 +1112,46 @@ private:
 
             if (inst.op == "B" || inst.op == "BL") {
                 if (inst.operands.size() != 1) {
-                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 需要 1 个跳转目标");
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_UNSUPPORTED_OPCODE + inst.op + STR_NEED_BRANCH_TARGET);
                     continue;
                 }
                 if (compiled_.codeLabels.count(upper(trim(inst.operands[0]))) == 0) {
-                    addCompileError(inst.lineNo, CompileErrorKind::UndefinedLabel, "跳转目标标签未定义: " + inst.operands[0]);
+                    addCompileError(inst.lineNo, CompileErrorKind::UndefinedLabel, STR_UNDEFINED_LABEL + inst.operands[0]);
                 }
                 continue;
             }
 
             if (inst.op == "BX") {
                 if (inst.operands.size() != 1) {
-                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 'BX' 需要 1 个操作数");
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_BX_NEED_OPERAND);
                     continue;
                 }
                 if (registerIndex(inst.operands[0]) < 0) {
-                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 'BX' 的寄存器无效: " + inst.operands[0]);
+                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, STR_BX_INVALID_REG + inst.operands[0]);
                 }
                 continue;
             }
 
             if (inst.op == "TST" || inst.op == "TEQ" || inst.op == "CMP" || inst.op == "CMN") {
                 if (inst.operands.size() != 2) {
-                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 需要 2 个操作数");
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_UNSUPPORTED_OPCODE + inst.op + STR_REQUIRES_OPERANDS + "2" + STR_OPERAND_SUFFIX);
                 }
                 continue;
             }
 
             if (inst.op == "MUL" || inst.op == "MLA") {
                 if (inst.operands.size() < 3) {
-                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 参数不足");
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_UNSUPPORTED_OPCODE + inst.op + STR_INSUFFICIENT_OPERANDS);
                 }
                 if (!inst.operands.empty() && registerIndex(inst.operands[0]) < 0) {
-                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 '" + inst.op + "' 的目标寄存器无效: " + inst.operands[0]);
+                    addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, STR_UNSUPPORTED_OPCODE + inst.op + STR_DEST_REG_INVALID + inst.operands[0]);
                 }
                 continue;
             }
 
             if (inst.op == "NOP") {
                 if (!inst.operands.empty()) {
-                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 'NOP' 不需要操作数");
+                    addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_NOP_NO_OPERANDS);
                 }
                 continue;
             }
@@ -1162,7 +1163,7 @@ private:
                     baseReg = 13;
                 } else {
                     if (inst.operands.size() < 2) {
-                        addCompileError(inst.lineNo, CompileErrorKind::OperandCount, "指令 '" + inst.op + "' 需要 base 寄存器和寄存器列表");
+                        addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_UNSUPPORTED_OPCODE + inst.op + STR_NEED_BASE_AND_LIST);
                         continue;
                     }
                     std::string baseText = inst.operands[0];
@@ -1172,14 +1173,14 @@ private:
                     }
                     baseReg = registerIndex(baseText);
                     if (baseReg < 0) {
-                        addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, "指令 '" + inst.op + "' 的基址寄存器无效: " + inst.operands[0]);
+                        addCompileError(inst.lineNo, CompileErrorKind::InvalidRegister, STR_UNSUPPORTED_OPCODE + inst.op + STR_INVALID_BASE_REG + inst.operands[0]);
                         continue;
                     }
                 }
                 const std::string &listText = inst.operands.back();
                 const auto regs = parseRegisterList(listText);
                 if (regs.empty()) {
-                    addCompileError(inst.lineNo, CompileErrorKind::Generic, "指令 '" + inst.op + "' 的寄存器列表无效: " + listText);
+                    addCompileError(inst.lineNo, CompileErrorKind::Generic, STR_UNSUPPORTED_OPCODE + inst.op + STR_INVALID_REG_LIST + listText);
                 }
                 continue;
             }
@@ -1193,7 +1194,7 @@ private:
 
     void printRegisterUsage(const std::set<int> &usedRegisters, const std::set<int> &writtenRegisters) const {
         if (!usedRegisters.empty()) {
-            std::cout << "使用寄存器: ";
+            std::cout << STR_REGISTERS_USED;
             bool first = true;
             for (int reg : usedRegisters) {
                 if (!first) std::cout << ", ";
@@ -1203,7 +1204,7 @@ private:
             std::cout << "\n";
         }
         if (!writtenRegisters.empty()) {
-            std::cout << "写入寄存器: ";
+            std::cout << STR_REGISTERS_WRITTEN;
             bool first = true;
             for (int reg : writtenRegisters) {
                 if (!first) std::cout << ", ";
@@ -1218,7 +1219,7 @@ private:
         if (touchedRegisters_.empty()) {
             return;
         }
-        std::cout << "寄存器状态: ";
+        std::cout << STR_REGISTER_STATE;
         bool first = true;
         for (int index : touchedRegisters_) {
             if (!first) {
@@ -1227,7 +1228,7 @@ private:
             std::cout << registerName(index) << '=' << registers_[index];
             first = false;
         }
-        std::cout << "\nFlags: N=" << flags_.n << " Z=" << flags_.z << " C=" << flags_.c << " V=" << flags_.v << "\n";
+        std::cout << "\n" << STR_FLAGS_LABEL << flags_.n << " Z=" << flags_.z << " C=" << flags_.c << " V=" << flags_.v << "\n";
     }
 
     std::string sourceName_ = "<stdin>";
@@ -1258,7 +1259,7 @@ std::optional<std::string> readSourceFromFile(const std::string &filePath) {
 }
 
 std::string readSourceFromUser() {
-    std::cout << "请输入 ARM/Keil 风格汇编源码，单独输入 END 结束：\n";
+    std::cout << STR_ENTER_SOURCE;
     std::cout << "--------------------------------------------------\n";
     std::string source;
     std::string line;
@@ -1282,8 +1283,7 @@ BNE LOOP
 }
 
 void printUsage(const char *programName) {
-    std::cout << "用法: " << programName << " [源码文件路径]\n";
-    std::cout << "不传参数时，会进入粘贴源码模式，输入 END 结束。\n";
+    std::cout << STR_USAGE << programName << STR_USAGE_DETAIL;
 }
 
 // ============================================================
@@ -1343,9 +1343,9 @@ public:
                     if (k == 'l' || k == 'L') {
                         nodelay(stdscr, FALSE);
                         if (!sim_.loadSource(sourceText_, sourceName_)) {
-                            statusMsg_ = "编译失败 (" + std::to_string(sim_.compileErrors().size()) + " 个错误)";
+                            statusMsg_ = STR_COMPILE_FAIL + std::to_string(sim_.compileErrors().size()) + STR_ERRORS_SUFFIX;
                         } else {
-                            statusMsg_ = "已重新加载";
+                            statusMsg_ = STR_RELOADED;
                         }
                         sim_.reset();
                         srcScroll_ = 1;
@@ -1363,9 +1363,9 @@ public:
             }
             case 'l': case 'L':
                 if (!sim_.loadSource(sourceText_, sourceName_)) {
-                    statusMsg_ = "编译失败 (" + std::to_string(sim_.compileErrors().size()) + " 个错误)";
+                    statusMsg_ = STR_COMPILE_FAIL + std::to_string(sim_.compileErrors().size()) + STR_ERRORS_SUFFIX;
                 } else {
-                    statusMsg_ = "已重新加载";
+                    statusMsg_ = STR_RELOADED;
                 }
                 sim_.reset();
                 srcScroll_ = 1;
@@ -1424,7 +1424,7 @@ private:
 
         if (maxY < 22 || maxX < 50) {
             endwin();
-            std::cerr << "终端太小（需要至少 50x22，当前 " << maxX << "x" << maxY << "）\n";
+            std::cerr << STR_TERMINAL_TOO_SMALL << maxX << "x" << maxY << "）\n";
             std::exit(1);
         }
 
@@ -1454,9 +1454,9 @@ private:
         getmaxyx(stdscr, maxY, maxX);
 
         attron(A_REVERSE);
-        const char *title = " ARM Simulator ";
+        const char *title = STR_ARM_SIMULATOR;
         mvprintw(0, 0, "%s", title);
-        const char *help = " S:step  R:run  L:reload  Q:quit  \xe2\x86\x91\xe2\x86\x93:scroll ";
+        const char *help = STR_HELP_B_TITLE;
         mvprintw(0, maxX - static_cast<int>(std::strlen(help)) - 1, "%s", help);
         for (int x = static_cast<int>(std::strlen(title)); x < maxX - static_cast<int>(std::strlen(help)) - 1; ++x) {
             mvaddch(0, x, ' ');
@@ -1574,11 +1574,11 @@ private:
         if (!statusMsg_.empty()) {
             status = " " + statusMsg_;
         } else if (sim_.finished()) {
-            status = " 程序已结束";
+            status = STR_STATUS_FINISHED;
         } else {
             int pc = sim_.getPC();
             int total = static_cast<int>(sim_.getCompiled().instructions.size());
-            status = " 运行中  PC=" + std::to_string(pc) + "/" + std::to_string(total);
+            status = STR_STATUS_RUNNING + std::to_string(pc) + "/" + std::to_string(total);
         }
         mvprintw(maxY - 1, 0, "%s", status.c_str());
         clrtoeol();
@@ -1616,13 +1616,13 @@ int main(int argc, char *argv[]) {
         if (argument == "--batch" && argc >= 3) {
             auto opt = readSourceFromFile(argv[2]);
             if (!opt.has_value()) {
-                std::cerr << "无法读取源码文件: " << argv[2] << "\n";
+                std::cerr << STR_CANNOT_READ_SOURCE << argv[2] << "\n";
                 return 1;
             }
             sourceText = *opt;
             sourceName = argv[2];
             if (!simulator.loadSource(sourceText, sourceName)) {
-                std::cerr << "源码检查失败\n";
+                std::cerr << STR_SOURCE_CHECK_FAIL;
                 for (const auto &error : simulator.compileErrors()) {
                     std::cerr << error << "\n";
                 }
@@ -1635,7 +1635,7 @@ int main(int argc, char *argv[]) {
                 executed++;
             }
             if (executed >= maxInstructions) {
-                std::cerr << "达到最大指令数限制\n";
+                std::cerr << STR_MAX_INSTRUCTIONS;
             }
             const auto &regs = simulator.getRegisters();
             const auto &f = simulator.getFlags();
@@ -1649,7 +1649,7 @@ int main(int argc, char *argv[]) {
 
         auto opt = readSourceFromFile(argument);
         if (!opt.has_value()) {
-            std::cout << "无法读取源码文件: " << argument << "\n";
+            std::cout << STR_CANNOT_READ_SOURCE << argument << "\n";
             return 1;
         }
         sourceText = *opt;
@@ -1657,14 +1657,14 @@ int main(int argc, char *argv[]) {
     } else {
         sourceText = readSourceFromUser();
         if (trim(sourceText).empty()) {
-            std::cout << "未输入源码，使用内置示例。\n";
+            std::cout << STR_NO_SOURCE_INPUT;
             sourceText = defaultProgram();
         }
         sourceName = "<stdin>";
     }
 
     if (!simulator.loadSource(sourceText, sourceName)) {
-        std::cout << "源码检查失败，未开始运行。\n";
+        std::cout << STR_SOURCE_CHECK_FAIL_RUN;
         for (const auto &error : simulator.compileErrors()) {
             std::cout << error << "\n";
         }

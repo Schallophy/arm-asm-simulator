@@ -10,6 +10,12 @@ find_package(Curses REQUIRED)
 add_executable(arm_asm_simulator
     src/main.cpp
 )
-
 target_link_libraries(arm_asm_simulator PRIVATE ${CURSES_LIBRARIES})
-target_include_directories(arm_asm_simulator PRIVATE ${CURSES_INCLUDE_DIRS})
+target_include_directories(arm_asm_simulator PRIVATE ${CURSES_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(arm_asm_simulator_en
+    src/main.cpp
+)
+target_link_libraries(arm_asm_simulator_en PRIVATE ${CURSES_LIBRARIES})
+target_include_directories(arm_asm_simulator_en PRIVATE ${CURSES_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(arm_asm_simulator_en PRIVATE LANG_EN)
