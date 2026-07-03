@@ -119,7 +119,7 @@ STOP B STOP
 运行：
 
 ```bash
-./build/arm_asm_simulator hello.s
+./arm_asm_simulator hello.s
 ```
 
 按 `S` 单步，按 `R` 一键运行到底。最终 `R1 = 55`（1+2+…+10）。
@@ -127,7 +127,7 @@ STOP B STOP
 不传文件名则进入**粘贴源码模式**：直接在终端里贴代码，单独一行输入 `END` 结束。
 
 ```bash
-./build/arm_asm_simulator
+./arm_asm_simulator
 ```
 
 ## TUI 操作手册
@@ -331,7 +331,7 @@ ADDNES R0, R1, R2     ; 条件有标志
 跳过 TUI，直接跑完程序，输出最终寄存器与标志位，便于自动化测试与 CI 集成。
 
 ```bash
-./build/arm_asm_simulator --batch program.s
+./arm_asm_simulator --batch program.s
 # 输出形如：R0=15 R1=0 R2=0 ... R13=0 R14=0 R15=0 N=0 Z=1 C=0 V=0
 ```
 
