@@ -1299,16 +1299,23 @@ public:
         : sim_(sim), sourceText_(source), sourceName_(sourceName) {}
 
     void run() {
+        // ncurses picks its output encoding from the C runtime locale, not
+        // from the Windows console code page. So setting CP_UTF8 alone is
+        // not enough — we have to put the C locale into a UTF-8 codeset,
+        // otherwise on a fresh cmd.exe / PowerShell session LC_ALL falls
+        // back to "C" (ASCII) and Chinese characters come out garbled.
+        char *loc = setlocale(LC_ALL, "");
+        if (loc == nullptr || std::strstr(loc, "UTF-8") == nullptr) {
+            if (setlocale(LC_ALL, ".UTF-8") == nullptr) {
+                setlocale(LC_ALL, "en_US.UTF-8");
+            }
+        }
 #ifdef _WIN32
-        // On Windows the console code page is independent of the C runtime
-        // locale: a Chinese system sits on CP936 by default, so UTF-8 strings
-        // (which our Chinese UI emits) come out garbled. Force the console to
-        // UTF-8 *before* setlocale / initscr. MSYS2's mintty already does
-        // this, but cmd.exe and PowerShell do not.
+        // Also switch the console code page so any output *before*
+        // initscr (or outside ncurses in batch mode) is UTF-8 too.
         SetConsoleOutputCP(CP_UTF8);
         SetConsoleCP(CP_UTF8);
 #endif
-        setlocale(LC_ALL, "");
         initscr();
         cbreak();
         noecho();
