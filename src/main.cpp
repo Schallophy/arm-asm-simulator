@@ -1100,7 +1100,7 @@ private:
         attron(A_REVERSE);
         const char *title = " ARM Simulator ";
         mvprintw(0, 0, "%s", title);
-        const char *help = " S:step  R:run  L:reload  Q:quit ";
+        const char *help = " S:step  R:run  L:reload  Q:quit  \xe2\x86\x91\xe2\x86\x93:scroll ";
         mvprintw(0, maxX - static_cast<int>(std::strlen(help)) - 1, "%s", help);
         for (int x = static_cast<int>(std::strlen(title)); x < maxX - static_cast<int>(std::strlen(help)) - 1; ++x) {
             mvaddch(0, x, ' ');
