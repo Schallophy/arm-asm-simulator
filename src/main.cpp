@@ -1677,8 +1677,8 @@ private:
             char ascii[bytesPerRow + 1];
             for (int col = 0; col < bytesPerRow; ++col) {
                 const long long a = rowAddr + col;
-                const long long v = src.dataMemory.count(a) ? src.dataMemory.at(a)
-                                   : (runtimeMem.count(a) ? runtimeMem.at(a) : 0);
+                const long long v = runtimeMem.count(a) ? runtimeMem.at(a)
+                                   : (src.dataMemory.count(a) ? src.dataMemory.at(a) : 0);
                 p += snprintf(buf + p, sizeof(buf) - p, "%02llx ", static_cast<unsigned long long>(v & 0xFF));
                 ascii[col] = (v >= 0x20 && v < 0x7F) ? static_cast<char>(v) : '.';
             }
