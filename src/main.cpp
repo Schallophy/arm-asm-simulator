@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <clocale>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -10,6 +12,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include <ncurses.h>
 
 namespace {
 
@@ -256,49 +260,62 @@ public:
         sourceName_ = sourceName;
         compileErrors_.clear();
         compiled_ = CompiledSource{};
+        sourceLines_.clear();
+        instructionLines_.clear();
+        {
+            std::istringstream splitter(source);
+            std::string sl;
+            while (std::getline(splitter, sl)) {
+                sourceLines_.push_back(sl);
+            }
+        }
 
         std::istringstream input(source);
         std::string line;
         int lineNo = 0;
         long long dataAddress = 0;
-        std::vector<std::string> pendingLabels;
+        std::vector<std::pair<std::string, int>> pendingLabels;
 
         auto addCompileError = [&](int errorLine, CompileErrorKind kind, const std::string &detail) {
             const std::string prefix = errorLine > 0 ? sourceName_ + "(" + std::to_string(errorLine) + ")" : sourceName_;
             compileErrors_.push_back(prefix + ": Error: " + compileErrorCode(kind) + ": " + detail);
         };
 
-        auto defineCodeLabel = [&](const std::string &label, int targetLine) {
+        auto defineCodeLabel = [&](const std::string &label, int labelLine) {
             const std::string normalized = upper(label);
             if (compiled_.codeLabels.count(normalized) > 0 || compiled_.symbolAddresses.count(normalized) > 0) {
-                addCompileError(targetLine, CompileErrorKind::DuplicateLabel, "重复定义标签 '" + label + "'");
+                addCompileError(labelLine, CompileErrorKind::DuplicateLabel, "重复定义标签 '" + label + "'");
                 return;
             }
             compiled_.codeLabels[normalized] = static_cast<int>(compiled_.instructions.size());
             compiled_.symbolAddresses[normalized] = static_cast<long long>(compiled_.instructions.size()) * 4;
+            codeLabelLines_[normalized] = labelLine;
         };
 
-        auto defineDataLabel = [&](const std::string &label, int targetLine) {
+        auto defineDataLabel = [&](const std::string &label, int labelLine) {
             const std::string normalized = upper(label);
             if (compiled_.codeLabels.count(normalized) > 0 || compiled_.symbolAddresses.count(normalized) > 0) {
-                addCompileError(targetLine, CompileErrorKind::DuplicateLabel, "重复定义标签 '" + label + "'");
+                addCompileError(labelLine, CompileErrorKind::DuplicateLabel, "重复定义标签 '" + label + "'");
                 return;
             }
             compiled_.symbolAddresses[normalized] = dataAddress;
+            dataLabelLines_[normalized] = labelLine;
         };
 
-        auto flushPendingLabels = [&](bool dataSection, int targetLine) {
-            for (const auto &label : pendingLabels) {
+        auto flushPendingLabels = [&](bool dataSection, int) {
+            for (const auto &entry : pendingLabels) {
+                const auto &label = entry.first;
                 if (dataSection) {
-                    defineDataLabel(label, targetLine);
+                    defineDataLabel(label, entry.second);
                 } else {
-                    defineCodeLabel(label, targetLine);
+                    defineCodeLabel(label, entry.second);
                 }
             }
             pendingLabels.clear();
         };
 
         auto parseInstructionLine = [&](const std::string &text, int targetLine) {
+            instructionLines_.insert(targetLine);
             std::istringstream parser(text);
             std::string opToken;
             parser >> opToken;
@@ -372,7 +389,7 @@ public:
                 }
                 const std::string label = trim(cleaned.substr(0, colonPos));
                 if (!label.empty()) {
-                    pendingLabels.push_back(label);
+                    pendingLabels.push_back({label, lineNo});
                 }
                 cleaned = trim(cleaned.substr(colonPos + 1));
                 if (cleaned.empty()) {
@@ -406,7 +423,7 @@ public:
                 std::string nextToken;
                 nextParser >> nextToken;
                 if (isDataDirective(nextToken)) {
-                    pendingLabels.push_back(firstToken);
+                    pendingLabels.push_back({firstToken, lineNo});
                     flushPendingLabels(true, lineNo);
                     const std::size_t directivePos = trimmedRemaining.find(nextToken);
                     const std::string directiveOperands = directivePos == std::string::npos ? std::string() : trim(trimmedRemaining.substr(directivePos + nextToken.size()));
@@ -414,7 +431,7 @@ public:
                     continue;
                 }
                 if (isSupportedInstructionToken(nextToken)) {
-                    pendingLabels.push_back(firstToken);
+                    pendingLabels.push_back({firstToken, lineNo});
                     flushPendingLabels(false, lineNo);
                     parseInstructionLine(trimmedRemaining, lineNo);
                     continue;
@@ -428,11 +445,11 @@ public:
             }
 
             if (isDirectiveToken(firstToken)) {
-                pendingLabels.push_back(firstToken);
+                pendingLabels.push_back({firstToken, lineNo});
                 continue;
             }
 
-            pendingLabels.push_back(firstToken);
+            pendingLabels.push_back({firstToken, lineNo});
         }
 
         if (!pendingLabels.empty()) {
@@ -469,6 +486,8 @@ public:
         memory_ = compiled_.dataMemory;
         pc_ = 0;
         finished_ = false;
+        touchedRegisters_.clear();
+        pendingLabelLine_ = -1;
     }
 
     void run() {
@@ -484,6 +503,8 @@ public:
             }
             return;
         }
+
+        pendingLabelLine_ = -1;
 
         const Instruction &inst = compiled_.instructions[pc_];
         const int currentPc = pc_;
@@ -510,6 +531,7 @@ public:
             if (reg >= 0) {
                 writtenRegisters.insert(reg);
                 registers_[reg] = value;
+                touchedRegisters_.insert(reg);
             }
         };
 
@@ -563,12 +585,16 @@ public:
         };
 
         auto branchTo = [&](const std::string &label) -> bool {
-            const auto it = compiled_.codeLabels.find(upper(trim(label)));
+            const std::string normalized = upper(trim(label));
+            const auto it = compiled_.codeLabels.find(normalized);
             if (it == compiled_.codeLabels.end()) {
                 return false;
             }
             pc_ = it->second;
             branched = true;
+            if (codeLabelLines_.count(normalized)) {
+                pendingLabelLine_ = codeLabelLines_[normalized];
+            }
             return true;
         };
 
@@ -659,6 +685,7 @@ public:
                         const long long postOffset = readValue(inst.operands[2]);
                         registers_[memoryOperand->baseReg] += postOffset;
                         writtenRegisters.insert(memoryOperand->baseReg);
+                        touchedRegisters_.insert(memoryOperand->baseReg);
                     }
                 }
             }
@@ -667,6 +694,7 @@ public:
                 if (op == "BL") {
                     registers_[14] = currentPc + 1;
                     writtenRegisters.insert(14);
+                    touchedRegisters_.insert(14);
                 }
                 branchTo(inst.operands[0]);
             }
@@ -687,6 +715,16 @@ public:
             printState();
         }
     }
+
+    // --- TUI accessors ---
+    const std::vector<std::string>& getSourceLines() const { return sourceLines_; }
+    const std::array<long long, 16>& getRegisters() const { return registers_; }
+    const Flags& getFlags() const { return flags_; }
+    const CompiledSource& getCompiled() const { return compiled_; }
+    int getPC() const { return pc_; }
+    int getPendingLabelLine() const { return pendingLabelLine_; }
+    void clearPendingLabel() { pendingLabelLine_ = -1; }
+
 
 private:
     void validateProgram() {
@@ -797,38 +835,40 @@ private:
     }
 
     void printRegisterUsage(const std::set<int> &usedRegisters, const std::set<int> &writtenRegisters) const {
-        std::cout << "使用寄存器: ";
-        if (usedRegisters.empty()) {
-            std::cout << "无";
-        } else {
+        if (!usedRegisters.empty()) {
+            std::cout << "使用寄存器: ";
             bool first = true;
             for (int reg : usedRegisters) {
                 if (!first) std::cout << ", ";
                 std::cout << registerName(reg);
                 first = false;
             }
+            std::cout << "\n";
         }
-        std::cout << "\n写入寄存器: ";
-        if (writtenRegisters.empty()) {
-            std::cout << "无";
-        } else {
+        if (!writtenRegisters.empty()) {
+            std::cout << "写入寄存器: ";
             bool first = true;
             for (int reg : writtenRegisters) {
                 if (!first) std::cout << ", ";
                 std::cout << registerName(reg);
                 first = false;
             }
+            std::cout << "\n";
         }
-        std::cout << "\n";
     }
 
     void printState() const {
+        if (touchedRegisters_.empty()) {
+            return;
+        }
         std::cout << "寄存器状态: ";
-        for (int index = 0; index <= 15; ++index) {
-            std::cout << registerName(index) << '=' << registers_[index];
-            if (index != 15) {
+        bool first = true;
+        for (int index : touchedRegisters_) {
+            if (!first) {
                 std::cout << "  ";
             }
+            std::cout << registerName(index) << '=' << registers_[index];
+            first = false;
         }
         std::cout << "\nFlags: N=" << flags_.n << " Z=" << flags_.z << " C=" << flags_.c << " V=" << flags_.v << "\n";
     }
@@ -836,12 +876,18 @@ private:
     std::string sourceName_ = "<stdin>";
     CompiledSource compiled_;
     std::vector<std::string> compileErrors_;
+    std::vector<std::string> sourceLines_;
     std::array<long long, 16> registers_{};
     Flags flags_;
     std::unordered_map<long long, long long> memory_;
+    std::set<int> touchedRegisters_;
     int pc_ = 0;
     bool finished_ = false;
     bool hasExecutableInstructions_ = false;
+    std::unordered_set<int> instructionLines_;
+    std::unordered_map<std::string, int> codeLabelLines_;
+    std::unordered_map<std::string, int> dataLabelLines_;
+    int pendingLabelLine_ = -1;
 };
 
 std::optional<std::string> readSourceFromFile(const std::string &filePath) {
@@ -883,6 +929,277 @@ void printUsage(const char *programName) {
     std::cout << "不传参数时，会进入粘贴源码模式，输入 END 结束。\n";
 }
 
+// ============================================================
+// TUI (Terminal User Interface) using ncurses
+// ============================================================
+
+class TUI {
+public:
+    TUI(Simulator &sim, const std::string &source, const std::string &sourceName)
+        : sim_(sim), sourceText_(source), sourceName_(sourceName) {}
+
+    void run() {
+        setlocale(LC_ALL, "");
+        initscr();
+        cbreak();
+        noecho();
+        curs_set(0);
+        keypad(stdscr, TRUE);
+
+        setup();
+        render();
+
+        while (true) {
+            int ch = getch();
+            switch (ch) {
+            case 's': case 'S': {
+                if (!sim_.finished()) {
+                    if (sim_.getPendingLabelLine() > 0) {
+                        sim_.clearPendingLabel();
+                    } else {
+                        sim_.step(false);
+                    }
+                }
+                statusMsg_.clear();
+                render();
+                break;
+            }
+            case 'r': {
+                bool reloaded = false;
+                sim_.reset();
+                statusMsg_.clear();
+                render();
+                nodelay(stdscr, TRUE);
+                while (!sim_.finished()) {
+                    sim_.step(false);
+                    napms(5);
+                    int k = getch();
+                    if (k == 'q' || k == 'Q') {
+                        nodelay(stdscr, FALSE);
+                        teardown();
+                        endwin();
+                        return;
+                    }
+                    if (k == 'l' || k == 'L') {
+                        nodelay(stdscr, FALSE);
+                        if (!sim_.loadSource(sourceText_, sourceName_)) {
+                            statusMsg_ = "编译失败 (" + std::to_string(sim_.compileErrors().size()) + " 个错误)";
+                        } else {
+                            statusMsg_ = "已重新加载";
+                        }
+                        sim_.reset();
+                        srcScroll_ = 1;
+                        reloaded = true;
+                        break;
+                    }
+                    if (k != ERR) {
+                        break;
+                    }
+                }
+                nodelay(stdscr, FALSE);
+                render();
+                if (reloaded) break;
+                break;
+            }
+            case 'l': case 'L':
+                if (!sim_.loadSource(sourceText_, sourceName_)) {
+                    statusMsg_ = "编译失败 (" + std::to_string(sim_.compileErrors().size()) + " 个错误)";
+                } else {
+                    statusMsg_ = "已重新加载";
+                }
+                sim_.reset();
+                srcScroll_ = 1;
+                render();
+                break;
+            case 'q': case 'Q':
+                teardown();
+                endwin();
+                return;
+            case KEY_RESIZE:
+                teardown();
+                setup();
+                render();
+                break;
+            }
+        }
+    }
+
+private:
+    void setup() {
+        int maxY, maxX;
+        getmaxyx(stdscr, maxY, maxX);
+
+        if (maxY < 22 || maxX < 50) {
+            endwin();
+            std::cerr << "终端太小（需要至少 50x22，当前 " << maxX << "x" << maxY << "）\n";
+            std::exit(1);
+        }
+
+        int divX = maxX * 3 / 5;
+        if (divX < 18) divX = 18;
+
+        srcWin_ = newwin(maxY - 2, divX, 1, 0);
+        regWin_ = newwin(maxY - 2, maxX - divX, 1, divX);
+    }
+
+    void teardown() {
+        if (srcWin_) { delwin(srcWin_); srcWin_ = nullptr; }
+        if (regWin_) { delwin(regWin_); regWin_ = nullptr; }
+    }
+
+    void render() {
+        renderTitleBar();
+        renderSourcePanel();
+        renderRegisterPanel();
+        renderStatusBar();
+        doupdate();
+    }
+
+    void renderTitleBar() {
+        int maxX;
+        [[maybe_unused]] int maxY;
+        getmaxyx(stdscr, maxY, maxX);
+
+        attron(A_REVERSE);
+        const char *title = " ARM Simulator ";
+        mvprintw(0, 0, "%s", title);
+        const char *help = " S:step  R:run  L:reload  Q:quit ";
+        mvprintw(0, maxX - static_cast<int>(std::strlen(help)) - 1, "%s", help);
+        for (int x = static_cast<int>(std::strlen(title)); x < maxX - static_cast<int>(std::strlen(help)) - 1; ++x) {
+            mvaddch(0, x, ' ');
+        }
+        attroff(A_REVERSE);
+        wnoutrefresh(stdscr);
+    }
+
+    void renderSourcePanel() {
+        werase(srcWin_);
+
+        int pH, pW;
+        getmaxyx(srcWin_, pH, pW);
+        box(srcWin_, 0, 0);
+        mvwprintw(srcWin_, 0, 2, " Source ");
+
+        const auto &lines = sim_.getSourceLines();
+        if (lines.empty()) {
+            wnoutrefresh(srcWin_);
+            return;
+        }
+
+        int currentLine = sim_.getPendingLabelLine();
+        if (currentLine < 0 && !sim_.finished()) {
+            const auto &compiled = sim_.getCompiled();
+            int pc = sim_.getPC();
+            if (pc >= 0 && pc < static_cast<int>(compiled.instructions.size())) {
+                currentLine = compiled.instructions[pc].lineNo;
+            }
+        }
+
+        int visible = pH - 2;
+        if (currentLine > 0) {
+            if (currentLine < srcScroll_) {
+                srcScroll_ = currentLine;
+            } else if (currentLine >= srcScroll_ + visible) {
+                srcScroll_ = currentLine - visible + 1;
+            }
+        }
+        if (srcScroll_ < 1) srcScroll_ = 1;
+
+        for (int i = 0; i < visible; ++i) {
+            int lineNum = srcScroll_ + i;
+            if (lineNum < 1 || lineNum > static_cast<int>(lines.size())) break;
+
+            bool isCurrent = (lineNum == currentLine);
+            if (isCurrent) {
+                wattron(srcWin_, A_REVERSE);
+            }
+
+            char prefix[16];
+            snprintf(prefix, sizeof(prefix), "%3d: ", lineNum);
+            std::string text = lines[lineNum - 1];
+            int maxText = pW - 2 - static_cast<int>(std::strlen(prefix));
+            if (maxText < 0) maxText = 0;
+            if (static_cast<int>(text.size()) > maxText) {
+                text = text.substr(0, maxText);
+            }
+            mvwprintw(srcWin_, i + 1, 1, "%s%s", prefix, text.c_str());
+
+            if (isCurrent) {
+                wattroff(srcWin_, A_REVERSE);
+            }
+        }
+
+        wnoutrefresh(srcWin_);
+    }
+
+    void renderRegisterPanel() {
+        werase(regWin_);
+
+        int pH, pW;
+        getmaxyx(regWin_, pH, pW);
+
+        box(regWin_, 0, 0);
+        mvwprintw(regWin_, 0, 2, " Registers ");
+
+        const auto &regs = sim_.getRegisters();
+        const auto &flags = sim_.getFlags();
+        static const char *regNames[16] = {
+            "R0","R1","R2","R3","R4","R5","R6","R7",
+            "R8","R9","R10","R11","R12","SP","LR","PC"
+        };
+
+        int line = 1;
+        for (int i = 0; i < 16 && line < pH - 1; ++i, ++line) {
+            bool isPC = (i == 15);
+            if (isPC) wattron(regWin_, A_BOLD);
+            char buf[64];
+            snprintf(buf, sizeof(buf), " %3s = %12lld", regNames[i], (long long)regs[i]);
+            mvwprintw(regWin_, line, 1, "%s", buf);
+            if (isPC) wattroff(regWin_, A_BOLD);
+        }
+
+        ++line;
+        if (line < pH - 1) {
+            char fbuf[64];
+            snprintf(fbuf, sizeof(fbuf), " Flags: N=%d  Z=%d  C=%d  V=%d",
+                     flags.n ? 1 : 0, flags.z ? 1 : 0,
+                     flags.c ? 1 : 0, flags.v ? 1 : 0);
+            mvwprintw(regWin_, line, 1, "%s", fbuf);
+        }
+
+        wnoutrefresh(regWin_);
+    }
+
+    void renderStatusBar() {
+        int maxY, maxX;
+        getmaxyx(stdscr, maxY, maxX);
+
+        attron(A_REVERSE);
+        std::string status;
+        if (!statusMsg_.empty()) {
+            status = " " + statusMsg_;
+        } else if (sim_.finished()) {
+            status = " 程序已结束";
+        } else {
+            int pc = sim_.getPC();
+            int total = static_cast<int>(sim_.getCompiled().instructions.size());
+            status = " 运行中  PC=" + std::to_string(pc) + "/" + std::to_string(total);
+        }
+        mvprintw(maxY - 1, 0, "%s", status.c_str());
+        clrtoeol();
+        attroff(A_REVERSE);
+        wnoutrefresh(stdscr);
+    }
+
+    Simulator &sim_;
+    std::string sourceText_;
+    std::string sourceName_;
+    std::string statusMsg_;
+    WINDOW *srcWin_ = nullptr;
+    WINDOW *regWin_ = nullptr;
+    int srcScroll_ = 1;
+};
+
 } // namespace
 
 int main(int argc, char *argv[]) {
@@ -891,6 +1208,9 @@ int main(int argc, char *argv[]) {
 
     Simulator simulator;
 
+    std::string sourceText;
+    std::string sourceName;
+
     if (argc >= 2) {
         const std::string argument = argv[1];
         if (argument == "-h" || argument == "--help") {
@@ -898,66 +1218,31 @@ int main(int argc, char *argv[]) {
             return 0;
         }
 
-        const auto sourceFromFile = readSourceFromFile(argument);
-        if (!sourceFromFile.has_value()) {
+        auto opt = readSourceFromFile(argument);
+        if (!opt.has_value()) {
             std::cout << "无法读取源码文件: " << argument << "\n";
             return 1;
         }
-
-        if (!simulator.loadSource(*sourceFromFile, argument)) {
-            std::cout << "源码检查失败，未开始运行。\n";
-            for (const auto &error : simulator.compileErrors()) {
-                std::cout << error << "\n";
-            }
-            return 1;
-        }
-        std::cout << "已从文件加载源码: " << argument << "\n";
+        sourceText = *opt;
+        sourceName = argument;
     } else {
-        std::string source = readSourceFromUser();
-        if (trim(source).empty()) {
+        sourceText = readSourceFromUser();
+        if (trim(sourceText).empty()) {
             std::cout << "未输入源码，使用内置示例。\n";
-            source = defaultProgram();
+            sourceText = defaultProgram();
         }
-
-        if (!simulator.loadSource(source, "<stdin>")) {
-            std::cout << "源码检查失败，未开始运行。\n";
-            for (const auto &error : simulator.compileErrors()) {
-                std::cout << error << "\n";
-            }
-            return 1;
-        }
+        sourceName = "<stdin>";
     }
 
-    if (!simulator.hasExecutableInstructions()) {
-        std::cout << "提示: 源码通过检查，但没有可执行指令，进入运行后将不会有步骤输出。\n";
+    if (!simulator.loadSource(sourceText, sourceName)) {
+        std::cout << "源码检查失败，未开始运行。\n";
+        for (const auto &error : simulator.compileErrors()) {
+            std::cout << error << "\n";
+        }
+        return 1;
     }
 
-    std::cout << "加载完成。命令: s=单步, r=重新运行, q=退出\n";
-
-    while (true) {
-        std::cout << "cmd> " << std::flush;
-        std::string cmd;
-        if (!std::getline(std::cin, cmd)) {
-            break;
-        }
-        cmd = trim(upper(cmd));
-        if (cmd == "Q") {
-            break;
-        }
-        if (cmd == "R") {
-            simulator.reset();
-            simulator.run();
-            continue;
-        }
-        if (cmd == "S") {
-            simulator.step(true);
-            continue;
-        }
-        if (cmd.empty()) {
-            continue;
-        }
-        std::cout << "未知命令。可用命令: s, r, q\n";
-    }
-
+    TUI tui(simulator, sourceText, sourceName);
+    tui.run();
     return 0;
 }
