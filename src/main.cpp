@@ -1043,6 +1043,7 @@ public:
     const std::array<long long, 16>& getRegisters() const { return registers_; }
     const Flags& getFlags() const { return flags_; }
     const CompiledSource& getCompiled() const { return compiled_; }
+    const std::unordered_map<long long, long long>& getMemory() const { return memory_; }
     int getPC() const { return pc_; }
     int getPendingLabelLine() const { return pendingLabelLine_; }
     void clearPendingLabel() { pendingLabelLine_ = -1; }
@@ -1478,28 +1479,41 @@ private:
         int maxY, maxX;
         getmaxyx(stdscr, maxY, maxX);
 
-        if (maxY < 22 || maxX < 50) {
+        if (maxY < 35 || maxX < 60) {
             endwin();
             std::cerr << STR_TERMINAL_TOO_SMALL << maxX << "x" << maxY << STR_TERMINAL_SUGGESTION << "\n";
             std::exit(1);
         }
 
         int divX = maxX * 3 / 5;
-        if (divX < 20) divX = 20;
+        if (divX < 24) divX = 24;
 
-        srcWin_ = newwin(maxY - 2, divX, 1, 0);
-        regWin_ = newwin(maxY - 2, maxX - divX, 1, divX);
+        // Split the available height (after title + status) into the
+        // top body (source + registers) and the bottom memory panel.
+        // The body gets at least 1/3 of the space; the memory panel gets
+        // the rest, capped at 24 rows so it doesn't dominate. The
+        // memory window is placed flush against the body (no gap row)
+        // to avoid a phantom line of overflow content from the source
+        // panel appearing between the two.
+        const int usable = maxY - 2;
+        const int memH = std::min(24, std::max(8, usable / 3));
+        const int bodyH = usable - memH;
+        srcWin_ = newwin(bodyH, divX, 1, 0);
+        regWin_ = newwin(bodyH, maxX - divX, 1, divX);
+        memWin_ = newwin(memH, maxX, bodyH + 1, 0);
     }
 
     void teardown() {
         if (srcWin_) { delwin(srcWin_); srcWin_ = nullptr; }
         if (regWin_) { delwin(regWin_); regWin_ = nullptr; }
+        if (memWin_) { delwin(memWin_); memWin_ = nullptr; }
     }
 
     void render() {
         renderTitleBar();
         renderSourcePanel();
         renderRegisterPanel();
+        renderMemoryPanel();
         renderStatusBar();
         doupdate();
     }
@@ -1621,6 +1635,61 @@ private:
         wnoutrefresh(regWin_);
     }
 
+    void renderMemoryPanel() {
+        if (!memWin_) return;
+        werase(memWin_);
+        int pH, pW;
+        getmaxyx(memWin_, pH, pW);
+        box(memWin_, 0, 0);
+        mvwprintw(memWin_, 0, 2, " Memory ");
+
+        const CompiledSource &src = sim_.getCompiled();
+        const auto &runtimeMem = sim_.getMemory();
+
+        // Find the data segment bounds from dataMemory. The runtime memory
+        // also has stack / scratch entries; dataMemory is the source of
+        // truth for the assembler-placed bytes.
+        long long minAddr = 0;
+        long long maxAddr = 0;
+        for (const auto &kv : src.dataMemory) {
+            if (kv.first < minAddr) minAddr = kv.first;
+            if (kv.first > maxAddr) maxAddr = kv.first;
+        }
+        // Pad to a 16-byte boundary on both ends so each row is 16 bytes
+        // and the last row doesn't truncate.
+        minAddr = (minAddr / 16) * 16;
+        maxAddr = ((maxAddr + 16) / 16) * 16;
+
+        const int bytesPerRow = 16;
+        const int headerRow = 1;
+        const int available = pH - 2;  // borders
+        if (available <= 0) {
+            wnoutrefresh(memWin_);
+            return;
+        }
+
+        long long startRow = minAddr;
+
+        char buf[256];
+        for (int row = 0; row < available; ++row) {
+            const long long rowAddr = startRow + row * bytesPerRow;
+            int p = 0;
+            p += snprintf(buf + p, sizeof(buf) - p, " %04llx: ", static_cast<unsigned long long>(rowAddr));
+            char ascii[bytesPerRow + 1];
+            for (int col = 0; col < bytesPerRow; ++col) {
+                const long long a = rowAddr + col;
+                const long long v = src.dataMemory.count(a) ? src.dataMemory.at(a)
+                                   : (runtimeMem.count(a) ? runtimeMem.at(a) : 0);
+                p += snprintf(buf + p, sizeof(buf) - p, "%02llx ", static_cast<unsigned long long>(v & 0xFF));
+                ascii[col] = (v >= 0x20 && v < 0x7F) ? static_cast<char>(v) : '.';
+            }
+            ascii[bytesPerRow] = '\0';
+            p += snprintf(buf + p, sizeof(buf) - p, " |%s|", ascii);
+            mvwprintw(memWin_, headerRow + row, 1, "%s", buf);
+        }
+        wnoutrefresh(memWin_);
+    }
+
     void renderStatusBar() {
         int maxY, maxX;
         getmaxyx(stdscr, maxY, maxX);
@@ -1648,6 +1717,7 @@ private:
     std::string statusMsg_;
     WINDOW *srcWin_ = nullptr;
     WINDOW *regWin_ = nullptr;
+    WINDOW *memWin_ = nullptr;
     int srcScroll_ = 1;
 };
 
