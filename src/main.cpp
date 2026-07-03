@@ -313,7 +313,7 @@ bool isSupportedOpcode(const std::string &op) {
         "AND", "ORR", "EOR", "BIC",
         "MUL", "MLA",
         "CMP", "CMN", "TST", "TEQ",
-        "LDR", "STR",
+        "LDR", "STR", "LDRB", "STRB",
         "B", "BL", "BX",
         "NOP",
         "LDM", "LDMIA", "LDMIB", "LDMDA", "LDMDB", "LDMFD", "LDMED", "LDMEA", "LDMFA",
@@ -471,7 +471,26 @@ public:
 
             const long long step = normalized == "DCB" ? 1 : normalized == "DCW" ? 2 : 4;
             for (const auto &operand : operands) {
-                const auto value = parseNumber(operand);
+                std::string token = trim(operand);
+
+                // DCB accepts character literals ('A' -> 0x41) and
+                // string literals ("Hi" -> 'H','i', possibly with trailing 0).
+                if (token.size() >= 2 && token.front() == '\'' && token.back() == '\'') {
+                    if (token.size() == 3) {
+                        compiled_.dataMemory[dataAddress] = static_cast<unsigned char>(token[1]);
+                        dataAddress += step;
+                        continue;
+                    }
+                }
+                if (token.size() >= 2 && token.front() == '"' && token.back() == '"') {
+                    for (std::size_t i = 1; i + 1 < token.size(); ++i) {
+                        compiled_.dataMemory[dataAddress] = static_cast<unsigned char>(token[i]);
+                        dataAddress += step;
+                    }
+                    continue;
+                }
+
+                const auto value = parseNumber(token);
                 if (!value.has_value()) {
                     addCompileError(targetLine, CompileErrorKind::InvalidMemoryOperand, normalized + STR_CONST_INVALID + operand);
                     continue;
@@ -883,7 +902,7 @@ public:
             }
         };
 
-        if (op == "LDR") {
+        if (op == "LDR" || op == "LDRB") {
             if (inst.operands.size() >= 2) {
                 const std::string &dest = inst.operands[0];
                 if (!inst.operands[1].empty() && inst.operands[1][0] == '=') {
@@ -901,7 +920,7 @@ public:
                         }
                         const long long address = base + (memoryOperand->writeBack ? 0 : memoryOperand->offset);
                         const long long value = memory_.count(address) ? memory_[address] : 0;
-                        writeValue(dest, value);
+                        writeValue(dest, op == "LDRB" ? (value & 0xFF) : value);
                         if (!memoryOperand->writeBack && inst.operands.size() == 3) {
                             const long long postOffset = readValue(inst.operands[2]);
                             addToReg(memoryOperand->baseReg, postOffset);
@@ -909,7 +928,7 @@ public:
                     }
                 }
             }
-        } else if (op == "STR") {
+        } else if (op == "STR" || op == "STRB") {
             if (inst.operands.size() >= 2) {
                 const long long value = readValue(inst.operands[0]);
                 const auto memoryOperand = parseMemoryOperand(inst.operands[1]);
@@ -920,7 +939,7 @@ public:
                         writeReg(memoryOperand->baseReg, base);
                     }
                     const long long address = base + (memoryOperand->writeBack ? 0 : memoryOperand->offset);
-                    memory_[address] = value;
+                    memory_[address] = (op == "STRB") ? (value & 0xFF) : value;
                     if (!memoryOperand->writeBack && inst.operands.size() == 3) {
                         const long long postOffset = readValue(inst.operands[2]);
                         addToReg(memoryOperand->baseReg, postOffset);
@@ -1064,7 +1083,7 @@ private:
                 continue;
             }
 
-            if (inst.op == "LDR" || inst.op == "STR") {
+            if (inst.op == "LDR" || inst.op == "STR" || inst.op == "LDRB" || inst.op == "STRB") {
                 if (inst.operands.size() != 2 && inst.operands.size() != 3) {
                     addCompileError(inst.lineNo, CompileErrorKind::OperandCount, STR_UNSUPPORTED_OPCODE + inst.op + STR_REQUIRES_OPERANDS + "2 or 3" + STR_OPERAND_SUFFIX);
                     continue;

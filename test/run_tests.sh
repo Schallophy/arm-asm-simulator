@@ -120,6 +120,10 @@ run_test "LDR =label" test/ldr_label.s "R0=42"
     run_test "LDMFD/STMFD aliases" test/ldm_stm_fd.s "R4=10" "R5=20"
     run_test "All 4 STM/LDM modes (IA/IB/DA/DB)" test/stm_ldm_modes.s "R2=170" "R6=187" "R7=204" "R8=221" "R0=4080"
 
+    # Byte-level memory access + DCB string literal
+    run_test "LDRB/STRB byte access" test/ldrb_test.s "R1=69" "R2=109" "R3=100" "R4=178"
+    run_test "String swap (BL/BX/LDRB/STRB/DCB \"...\")" test/str_swap.s "R4=24" "R5=46"
+
 # PUSH/POP
 run_test "PUSH/POP single" test/push_pop_single.s "R0=0" "R1=42"
 run_test "PUSH/POP multiple" test/push_pop_multiple.s "R2=10" "R3=20" "R4=30"
