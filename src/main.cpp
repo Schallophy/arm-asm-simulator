@@ -611,6 +611,28 @@ public:
         return finished_ || pc_ >= static_cast<int>(compiled_.instructions.size());
     }
 
+    // Detect a "tight self-loop": an unconditional branch whose target
+    // is the instruction itself (e.g. "stop\n    b stop").
+    bool isTightSelfLoop(int pc) const {
+        if (pc < 0 || pc >= static_cast<int>(compiled_.instructions.size())) {
+            return false;
+        }
+        const Instruction &inst = compiled_.instructions[pc];
+        if (inst.op != "B" || inst.cond != Cond::AL || inst.operands.empty()) {
+            return false;
+        }
+        const std::string target = upper(trim(inst.operands[0]));
+        const auto it = compiled_.codeLabels.find(target);
+        if (it == compiled_.codeLabels.end()) {
+            return false;
+        }
+        return it->second == pc;
+    }
+
+    void setFinished() {
+        finished_ = true;
+    }
+
     void reset() {
         registers_.fill(0);
         flags_ = {};
@@ -1753,9 +1775,13 @@ int main(int argc, char *argv[]) {
                 }
                 return 1;
             }
-            int maxInstructions = 10000;
+            int maxInstructions = 100000;
             int executed = 0;
             while (!simulator.finished() && executed < maxInstructions) {
+                if (simulator.isTightSelfLoop(simulator.getPC())) {
+                    simulator.setFinished();
+                    break;
+                }
                 simulator.step(false);
                 executed++;
             }
