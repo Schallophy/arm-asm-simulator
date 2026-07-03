@@ -1363,8 +1363,13 @@ public:
                 render();
                 nodelay(stdscr, TRUE);
                 while (!sim_.finished()) {
-                    sim_.step(false);
-                    napms(5);
+                    if (sim_.getPendingLabelLine() > 0) {
+                        sim_.clearPendingLabel();
+                    } else {
+                        sim_.step(false);
+                    }
+                    render();
+                    napms(200);
                     int k = getch();
                     if (k == 'q' || k == 'Q') {
                         nodelay(stdscr, FALSE);
