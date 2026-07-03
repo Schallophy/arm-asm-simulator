@@ -549,6 +549,10 @@ public:
             }
 
             if (isDirectiveToken(firstToken)) {
+                if (upper(firstToken) == "AREA") {
+                    // Skip AREA directives - they are section markers, not labels
+                    continue;
+                }
                 pendingLabels.push_back({firstToken, lineNo});
                 continue;
             }
@@ -1606,6 +1610,40 @@ int main(int argc, char *argv[]) {
         const std::string argument = argv[1];
         if (argument == "-h" || argument == "--help") {
             printUsage(argv[0]);
+            return 0;
+        }
+
+        if (argument == "--batch" && argc >= 3) {
+            auto opt = readSourceFromFile(argv[2]);
+            if (!opt.has_value()) {
+                std::cerr << "无法读取源码文件: " << argv[2] << "\n";
+                return 1;
+            }
+            sourceText = *opt;
+            sourceName = argv[2];
+            if (!simulator.loadSource(sourceText, sourceName)) {
+                std::cerr << "源码检查失败\n";
+                for (const auto &error : simulator.compileErrors()) {
+                    std::cerr << error << "\n";
+                }
+                return 1;
+            }
+            int maxInstructions = 10000;
+            int executed = 0;
+            while (!simulator.finished() && executed < maxInstructions) {
+                simulator.step(false);
+                executed++;
+            }
+            if (executed >= maxInstructions) {
+                std::cerr << "达到最大指令数限制\n";
+            }
+            const auto &regs = simulator.getRegisters();
+            const auto &f = simulator.getFlags();
+            for (int i = 0; i < 16; ++i) {
+                std::cout << registerName(i) << "=" << regs[i] << " ";
+            }
+            std::cout << "N=" << (f.n ? 1 : 0) << " Z=" << (f.z ? 1 : 0)
+                      << " C=" << (f.c ? 1 : 0) << " V=" << (f.v ? 1 : 0) << "\n";
             return 0;
         }
 
