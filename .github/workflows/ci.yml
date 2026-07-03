@@ -45,12 +45,14 @@ jobs:
         with:
           msystem: MINGW64
           update: true
+          cache: true
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-ncurses
             mingw-w64-x86_64-ccache
+            mingw-w64-x86_64-pkg-config
 
       - name: ccache
         uses: actions/cache@v4
@@ -61,9 +63,7 @@ jobs:
 
       - name: Configure CMake (Linux/macOS)
         if: runner.os != 'Windows'
-        run: |
-          export PATH="/usr/lib/ccache:/opt/homebrew/opt/ccache/libexec:$PATH"
-          cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build (Linux/macOS)
@@ -73,9 +73,8 @@ jobs:
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
-        run: |
-          export PATH="/mingw64/lib/ccache/bin:$PATH"
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+        run: cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build (Windows)
