@@ -1,0 +1,7 @@
+    AREA TEST, CODE, READONLY
+    ENTRY
+
+    MOV R0, #1
+STOP
+    BEQ STOP
+    END

@@ -1,0 +1,11 @@
+    AREA TEST, CODE, READONLY
+    ENTRY
+
+    MOV R0, #3
+LOOP
+    SUBS R0, R0, #1
+    BEQ DONE
+    B LOOP
+DONE
+    B DONE
+    END

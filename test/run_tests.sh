@@ -29,26 +29,27 @@ run_test() {
         return 1
     fi
     
-    local last_line
-    last_line=$(echo "$output" | tail -1)
-    
-    if [[ -z "$last_line" ]]; then
-        echo -e "${RED}FAILED${NC} (no output)"
+    # Find the register state line (contains R0=... pattern)
+    local reg_line
+    reg_line=$(echo "$output" | grep -E '^R0=' | head -1)
+
+    if [[ -z "$reg_line" ]]; then
+        echo -e "${RED}FAILED${NC} (no register output)"
         FAILED=$((FAILED + 1))
         return 1
     fi
-    
+
     local all_match=true
     local failed_details=""
-    
+
     for check in "${expected[@]}"; do
         local key="${check%%=*}"
         local expected_val="${check#*=}"
-        
+
         # Extract value with word boundary to avoid matching substrings
         local actual_val
-        actual_val=$(echo " $last_line " | grep -oE " ${key}=-?[0-9]+ " | head -1 | tr -d ' ' | cut -d= -f2)
-        
+        actual_val=$(echo " $reg_line " | grep -oE " ${key}=-?[0-9]+ " | head -1 | tr -d ' ' | cut -d= -f2)
+
         if [ -z "$actual_val" ]; then
             all_match=false
             failed_details="$failed_details\n  $key: expected=$expected_val actual=<missing>"
@@ -57,13 +58,13 @@ run_test() {
             failed_details="$failed_details\n  $key: expected=$expected_val actual=$actual_val"
         fi
     done
-    
+
     if $all_match; then
         echo -e "${GREEN}PASSED${NC}"
         PASSED=$((PASSED + 1))
     else
         echo -e "${RED}FAILED${NC}$failed_details"
-        echo "  Output: $last_line"
+        echo "  Output: $reg_line"
         FAILED=$((FAILED + 1))
     fi
 }
@@ -140,6 +141,11 @@ run_test "Sign extension" test/sign_ext.s "R0=-1" "R1=-1"
 run_test "Overflow/carry flags" test/overflow_carry.s "R0=-2147483648" "N=1" "Z=0" "C=0" "V=1"
 run_test "Conditional HI/LS" test/cond_hi_ls.s "R2=1" "R3=0" "R4=0" "R5=1"
 run_test "Comprehensive flag checks" test/flags_comprehensive.s "R2=0" "R3=-2147483648" "R4=-5" "R5=5"
+
+# Tight self-loop detection
+run_test "Tight self-loop (B STOP)" test/tight_self_loop.s "R0=5"
+run_test "Tight self-loop after loop" test/tight_self_loop2.s "R0=0"
+run_test "Conditional self-loop not detected" test/cond_self_loop.s "R0=1"
 
 echo ""
 echo "=========================================="
