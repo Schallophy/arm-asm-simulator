@@ -5,6 +5,13 @@ project(arm_asm_simulator LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Force UTF-8 as the source and execution character set on every platform.
+# On non-Windows gcc this is already the default, but on Windows MinGW gcc
+# defaults to the system code page (CP936 / GBK on a Chinese system), which
+# would embed string literals as GBK. Windows Terminal then tries to render
+# those bytes as UTF-8 and shows mojibake.
+add_compile_options(-finput-charset=UTF-8 -fexec-charset=UTF-8)
+
 if(WIN32)
   # MSYS2 / MinGW: locate ncursesw manually.
   #
