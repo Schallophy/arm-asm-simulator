@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <unistd.h>
 #include <set>
 #include <sstream>
 #include <string>
@@ -945,6 +946,9 @@ public:
         noecho();
         curs_set(0);
         keypad(stdscr, TRUE);
+        mousemask(ALL_MOUSE_EVENTS, NULL);
+        mouseinterval(0);
+        write(STDOUT_FILENO, "\033[?1000h\033[?1002h\033[?1006h", 21);
 
         setup();
         render();
@@ -1013,8 +1017,41 @@ public:
                 break;
             case 'q': case 'Q':
                 teardown();
+                write(STDOUT_FILENO, "\033[?1006l\033[?1002l\033[?1000l", 24);
                 endwin();
                 return;
+            case KEY_UP:
+                if (srcScroll_ > 1) { --srcScroll_; render(); }
+                break;
+            case KEY_DOWN:
+                { ++srcScroll_; render(); }
+                break;
+            case KEY_PPAGE: {
+                int h, d;
+                getmaxyx(srcWin_, h, d);
+                srcScroll_ -= h - 2;
+                if (srcScroll_ < 1) srcScroll_ = 1;
+                render();
+                break;
+            }
+            case KEY_NPAGE: {
+                int h, d;
+                getmaxyx(srcWin_, h, d);
+                srcScroll_ += h - 2;
+                render();
+                break;
+            }
+            case KEY_MOUSE: {
+                MEVENT ev;
+                if (getmouse(&ev) == OK) {
+                    if (ev.bstate & ((mmask_t)0x80000)) {
+                        if (srcScroll_ > 1) { --srcScroll_; render(); }
+                    } else if (ev.bstate & ((mmask_t)0x2000000)) {
+                        ++srcScroll_; render();
+                    }
+                }
+                break;
+            }
             case KEY_RESIZE:
                 teardown();
                 setup();
@@ -1036,7 +1073,7 @@ private:
         }
 
         int divX = maxX * 3 / 5;
-        if (divX < 18) divX = 18;
+        if (divX < 20) divX = 20;
 
         srcWin_ = newwin(maxY - 2, divX, 1, 0);
         regWin_ = newwin(maxY - 2, maxX - divX, 1, divX);
@@ -1152,8 +1189,10 @@ private:
         for (int i = 0; i < 16 && line < pH - 1; ++i, ++line) {
             bool isPC = (i == 15);
             if (isPC) wattron(regWin_, A_BOLD);
+            long long val = (long long)regs[i];
+            unsigned u32 = (unsigned)(val & 0xFFFFFFFFULL);
             char buf[64];
-            snprintf(buf, sizeof(buf), " %3s = %12lld", regNames[i], (long long)regs[i]);
+            snprintf(buf, sizeof(buf), " %3s = %11lld  (0x%08X)", regNames[i], val, u32);
             mvwprintw(regWin_, line, 1, "%s", buf);
             if (isPC) wattroff(regWin_, A_BOLD);
         }
