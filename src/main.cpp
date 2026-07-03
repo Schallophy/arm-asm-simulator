@@ -4,6 +4,7 @@
 #include <clocale>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <unistd.h>
