@@ -114,10 +114,11 @@ run_test "LDR/STR post-indexed" test/ldr_str_postindexed.s "R2=42"
 run_test "LDR =constant" test/ldr_const.s "R0=305419896"
 run_test "LDR =label" test/ldr_label.s "R0=42"
 
-# LDM/STM
-run_test "LDMIA/STMIA" test/ldm_stm_ia.s "R4=1" "R5=2" "R6=3"
-run_test "LDMDB/STMDB" test/ldm_stm_db.s "R4=1" "R5=2" "R6=3"
-run_test "LDMFD/STMFD aliases" test/ldm_stm_fd.s "R4=10" "R5=20"
+    # LDM/STM
+    run_test "LDMIA/STMIA" test/ldm_stm_ia.s "R4=1" "R5=2" "R6=3"
+    run_test "LDMDB/STMDB" test/ldm_stm_db.s "R4=1" "R5=2" "R6=3"
+    run_test "LDMFD/STMFD aliases" test/ldm_stm_fd.s "R4=10" "R5=20"
+    run_test "All 4 STM/LDM modes (IA/IB/DA/DB)" test/stm_ldm_modes.s "R2=170" "R6=187" "R7=204" "R8=221" "R0=4080"
 
 # PUSH/POP
 run_test "PUSH/POP single" test/push_pop_single.s "R0=0" "R1=42"
